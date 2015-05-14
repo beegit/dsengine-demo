@@ -1,0 +1,26 @@
+{
+  "name": "dsengine-demo",
+  "version": "1.0.0",
+  "description": "Demo of the dsengine",
+  "main": "app.js",
+  "dependencies": {
+    "body-parser": "^1.12.4",
+    "dsengine": "^0.1.1",
+    "dsengine-db-redis": "^1.0.0",
+    "express": "^4.12.3"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kmctown/dsengine-demo.git"
+  },
+  "author": "Kris Ciccarello",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/kmctown/dsengine-demo/issues"
+  },
+  "homepage": "https://github.com/kmctown/dsengine-demo"
+}
