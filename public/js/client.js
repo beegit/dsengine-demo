@@ -47,10 +47,8 @@
 	var DiffSyncClient = __webpack_require__(7).Client;
 	var _ = __webpack_require__(2);
 
-
-
 	$(document).ready(function() {
-	  var client1 = new DiffSyncClient({
+	  var client1 = window.client1 = new DiffSyncClient({
 	    transport: {
 	      send: function(editPacket) {
 	        return $.ajax({
@@ -58,8 +56,8 @@
 	          method: "POST",
 	          dataType: "json",
 	          data: JSON.stringify({
-	            docId: "1",
-	            clientId: "abc",
+	            docId: "d1",
+	            clientId: "c1",
 	            editPacket: {
 	              clientVersion: editPacket.clientVersion,
 	              serverVersion: editPacket.serverVersion,
@@ -80,10 +78,12 @@
 	    client1.startSync($("#client1").val())
 	      .then(function(editPacket) {
 	        client1.receiveEdits(editPacket);
+	        console.info("Setting client1 contents", client1.clientData.contents);
+	        $("#client1").val(client1.clientData.contents);
 	      });
 	  });
 
-	  var client2 = new DiffSyncClient({
+	  var client2 = window.client2 = new DiffSyncClient({
 	    transport: {
 	      send: function(editPacket) {
 	        return $.ajax({
@@ -91,8 +91,8 @@
 	          method: "POST",
 	          dataType: "json",
 	          data: JSON.stringify({
-	            docId: "1",
-	            clientId: "defg",
+	            docId: "d1",
+	            clientId: "c2",
 	            editPacket: {
 	              clientVersion: editPacket.clientVersion,
 	              serverVersion: editPacket.serverVersion,
@@ -113,10 +113,10 @@
 	    client2.startSync($("#client2").val())
 	      .then(function(editPacket) {
 	        client2.receiveEdits(editPacket);
+	        console.info("Setting client2 contents", client2.clientData.contents);
+	        $("#client2").val(client2.clientData.contents);
 	      });
 	  });
-
-	  console.log("hello, world!");
 	});
 
 
@@ -125,112 +125,50 @@
 /***/ function(module, exports, __webpack_require__) {
 
 	var _ = __webpack_require__(8);
-	var Dmp = __webpack_require__(10);
-	var dmp = new Dmp();
 
 	var defaults = {
-	  contents: "",
-	  shadow: {
-	    text: "",
-	    clientVersion : 0,
-	    serverVersion: 0
-	  }
+	  serverVersion: 0,
+	  clientVersion: 0
 	};
 
-	var ClientData = function ClientData(data) {
+	/**
+	 * EditPacket wraps up messaging between the dsengine client and server
+	 * by passing a stack of edit objects to patch and acknowledging the latest
+	 * versions of each other's data in the appropriate version numbers.
+	 *
+	 * @param {Object} data Edit packet hash
+	 * @param {Number|String} serverVersion The server version #
+	 * @param {Number|String} clientVersion The client version #
+	 * @param {Array} editStack Stack of edits to apply
+	 * @returns {EditPacket}
+	 */
+	var EditPacket = function EditPacket(data) {
 	  data = (data || {});
 
-	  if (data.hasOwnProperty("shadow") && !_.isObject(data.shadow)) {
-	    delete data.shadow;
+	  data.serverVersion = Number(data.serverVersion) || defaults.serverVersion;
+	  data.clientVersion = Number(data.clientVersion) || defaults.clientVersion;
+
+	  if (data.hasOwnProperty("editStack") && !_.isArray(data.editStack)) {
+	    delete data.editStack;
 	  }
 
 	  _.defaults(data, defaults);
-	  _.defaults(data.shadow, defaults.shadow);
+	  data.editStack = (data.editStack || []);
 
-	  // TODO: Pull contents out of here and perform the
-	  // contents => serverText refactor. Updating serverText
-	  // needs to be an atomic operation.
-	  this.contents = data.contents;
-	  this.shadow = {
-	    text: data.shadow.text,
-	    clientVersion: data.shadow.clientVersion,
-	    serverVersion: data.shadow.serverVersion
-	  };
+	  this.serverVersion = data.serverVersion;
+	  this.clientVersion = data.clientVersion;
+	  this.editStack = data.editStack;
 
 	  return this;
 	};
 
-	/**
-	 * Apply the supplied editstack as patches on top of the shadow text.
-	 *
-	 * @param {Array} editStack The editstack to patch on top of the shadow.
-	 * @returns {ClientData}
-	 */
-	ClientData.prototype.applyEdits = function applyEdits(editStack) {
-	  var _this = this;
-
-	  editStack.map(function(edit) {
-	    if (edit.clientVersion === _this.shadow.clientVersion &&
-	        edit.serverVersion === _this.shadow.serverVersion) {
-	      var patch = dmp.patch_fromText(edit.patch);
-	      var updatedShadow = dmp.patch_apply(patch, _this.shadow.text);
-	      var updatedContents = dmp.patch_apply(patch, _this.contents);
-
-	      if (!_.isString(updatedShadow[0])) {
-	        // TODO Error handling?
-	      } else {
-	        _this.shadow.text = updatedShadow[0];
-	      }
-	      if (!_.isString(updatedContents[0])) {
-	        // TODO Error handling?
-	      } else {
-	        _this.contents = updatedContents[0];
-	      }
-
-	      _this.shadow.clientVersion++;
-	    }
-	  });
+	EditPacket.prototype.addEdit = function addEdit(edit) {
+	  this.editStack.push(edit);
 
 	  return this;
 	};
 
-	/**
-	 * Make a set of patches based on the difference between the
-	 * server text and the shadow text.
-	 *
-	 * @returns {[Patch]} Array of patches.
-	 */
-	ClientData.prototype.makePatches = function makePatches() {
-	  return dmp.patch_make(this.shadow.text, this.contents);
-	};
-
-	/**
-	 * Apply the supplied patches to the shadow text. The patches
-	 * __must be in text format__.
-	 *
-	 * @param {[Patch]} textPatches The text patches to apply.
-	 */
-	ClientData.prototype.applyPatches = function applyPatches(textPatches) {
-	  this.shadow.text = dmp.patch_apply(textPatches, this.shadow.text)[0];
-	  return this;
-	};
-
-	/**
-	 * Convert the supplied dmp native patches to text patches. If none
-	 * specified, attempt to make patches.
-	 *
-	 * @param {[Patch]} [patches] The patches to convert to text patches.
-	 * @returns {[Patch]} Array of patches.
-	 */
-	ClientData.prototype.getTextPatches = function getTextPatches(patches) {
-	  if (patches) {
-	    return dmp.patch_toText(patches);
-	  }
-
-	  return dmp.patch_toText(this.makePatches());
-	};
-
-	module.exports = ClientData;
+	module.exports = EditPacket;
 
 
 /***/ },
@@ -12447,8 +12385,8 @@
 /***/ function(module, exports, __webpack_require__) {
 
 	/* WEBPACK VAR INJECTION */(function(module) {var _ = __webpack_require__(8);
-	var ClientData = __webpack_require__(1);
-	var EditPacket = __webpack_require__(6);
+	var ClientData = __webpack_require__(6);
+	var EditPacket = __webpack_require__(1);
 
 	/**
 	 * DsEngineClient
@@ -12472,7 +12410,7 @@
 	    serverVersion: 0
 	  });
 
-	  this.clientData = new ClientData({
+	  this.clientData = new ClientData("client", {
 	    contents: opts.contents,
 	    shadow: {
 	      text: opts.shadow.text,
@@ -12537,19 +12475,22 @@
 	DsEngineClient.prototype.receiveEdits = function receiveEdits(editPacket) {
 	  this.syncing = false;
 
+	  // Clear the local edit stack if the server ack's that they've
+	  // been processed
+	  if (editPacket.clientVersion === this.clientData.shadow.clientVersion) {
+	    this.clearEdits();
+	  }
+
+	  // Apply any new edits coming from the server
 	  if (editPacket.editStack && editPacket.editStack.length > 0) {
 	    this.clientData.applyEdits(editPacket.editStack);
 	  }
-
-	  this.clearEdits(editPacket);
 	};
 
 	/**
 	 * Clear out the edit stack since the server has processed the edits.
 	 */
 	DsEngineClient.prototype.clearEdits = function clearEdits() {
-
-	  // remove edits from this.editStack
 	  this.editStack = [];
 	};
 
@@ -12565,8 +12506,8 @@
 
 	var async = __webpack_require__(9);
 	var _ = __webpack_require__(8);
-	var EditPacket = __webpack_require__(6);
-	var ClientData = __webpack_require__(1);
+	var EditPacket = __webpack_require__(1);
+	var ClientData = __webpack_require__(6);
 
 	/**
 	 * DSEngineServer
@@ -12628,18 +12569,35 @@
 
 	  var _this = this;
 
+	  if (editPacket) {
+	    editPacket = new EditPacket(editPacket);
+	  }
+
 	  async.waterfall([
 
+	    // Get the client's data for this doc
 	    function(done) {
 	      _this.db.get(function(err, clientData) {
 	        if (err) {
 	          return done(err);
 	        }
 
-	        done(null, new ClientData(clientData));
+	        done(null, new ClientData("server", clientData));
 	      });
 	    },
 
+	    // Clear the edit stack if the versions match
+	    function(clientData, done) {
+	      if (editPacket.serverVersion !== clientData.shadow.serverVersion) {
+	        return done(null, clientData);
+	      }
+
+	      _this.db.saveEditStack([], function(err) {
+	        done(err, clientData);
+	      });
+	    },
+
+	    // Apply any edits in the edit stack coming from the client
 	    function(clientData, done) {
 	      if (!editPacket ||
 	          !editPacket.editStack ||
@@ -12678,7 +12636,7 @@
 	        if (err) {
 	          return done(err);
 	        }
-	        done(null, new ClientData(clientData));
+	        done(null, new ClientData("server", clientData));
 	      });
 	    },
 
@@ -12769,40 +12727,147 @@
 /***/ function(module, exports, __webpack_require__) {
 
 	var _ = __webpack_require__(8);
+	var Dmp = __webpack_require__(10);
+	var dmp = new Dmp();
 
 	var defaults = {
-	  serverVersion: 0,
-	  clientVersion: 0
+	  contents: "",
+	  shadow: {
+	    text: "",
+	    clientVersion : 0,
+	    serverVersion: 0
+	  }
 	};
 
-	var EditPacket = function EditPacket(data) {
-	  data = (data || {});
+	/**
+	 * ClientData encapsulates the text and shadows for each client instance
+	 * and handles diffing/patching responsibilites.
+	 *
+	 * @param {String} context Where ClientData is running (client|server)
+	 * @param {Object} options The client data options hash
+	 * @param {String} [options.contents] The shared text
+	 * @param {Object} [options.shadow] Text shadow for this client
+	 * @param {Number} [options.shadow.clientVersion] Client shadow client version #
+	 * @param {Number} [options.shadow.serverVersion] Client shadow server version #
+	 * @param {String} [options.shadow.text] Client shadow text
+	 * @returns {ClientData}
+	 */
+	var ClientData = function ClientData(context, options) {
+	  options = (options || {});
 
-	  if (data.hasOwnProperty("editStack") && !_.isArray(data.editStack)) {
-	    delete data.editStack;
+	  if (context !== "client" && context !== "server") {
+	    throw new Error("Client Data requires a context (client|server)");
 	  }
 
-	  _.defaults(data, defaults);
-	  data.editStack = (data.editStack || []);
+	  if (options.hasOwnProperty("contents") && !_.isString(options.contents)) {
+	    delete options.contents;
+	  }
+	  if (options.hasOwnProperty("shadow") && !_.isObject(options.shadow)) {
+	    delete options.shadow;
+	  }
 
-	  this.serverVersion = data.serverVersion;
-	  this.clientVersion = data.clientVersion;
-	  this.editStack = data.editStack;
+	  if (options.shadow) {
+	    options.shadow.clientVersion =
+	      Number(options.shadow.clientVersion) || defaults.clientVersion;
+
+	    options.shadow.serverVersion =
+	      Number(options.shadow.serverVersion) || defaults.serverVersion;
+	  }
+
+	  _.defaults(options, defaults);
+	  _.defaults(options.shadow, defaults.shadow);
+
+	  this.context = context;
+	  // TODO: Pull contents out of here and perform the
+	  // contents => serverText refactor. Updating serverText
+	  // needs to be an atomic operation.
+	  this.contents = options.contents;
+	  this.shadow = {
+	    text: options.shadow.text,
+	    clientVersion: options.shadow.clientVersion,
+	    serverVersion: options.shadow.serverVersion
+	  };
 
 	  return this;
 	};
 
-	EditPacket.prototype.addEdit = function addEdit(edit) {
-	  this.editStack.push(edit);
+	/**
+	 * Apply the supplied editstack as patches on top of the shadow text.
+	 *
+	 * @param {Array} editStack The editstack to patch on top of the shadow.
+	 * @returns {ClientData}
+	 */
+	ClientData.prototype.applyEdits = function applyEdits(editStack) {
+	  var _this = this;
+
+	  editStack.map(function(edit) {
+	    if (edit.clientVersion === _this.shadow.clientVersion &&
+	        edit.serverVersion === _this.shadow.serverVersion) {
+	      var patch = dmp.patch_fromText(edit.patch);
+	      var updatedShadow = dmp.patch_apply(patch, _this.shadow.text);
+	      var updatedContents = dmp.patch_apply(patch, _this.contents);
+
+	      if (!_.isString(updatedShadow[0])) {
+	        // TODO Error handling?
+	      } else {
+	        _this.shadow.text = updatedShadow[0];
+	      }
+	      if (!_.isString(updatedContents[0])) {
+	        // TODO Error handling?
+	      } else {
+	        _this.contents = updatedContents[0];
+	      }
+
+	      if (_this.context === "client") {
+	        // When the client receives new edits, bump the server #
+	        _this.shadow.serverVersion++;
+	      } else {
+	        // When the server receives new edits, bump the client #
+	        _this.shadow.clientVersion++;
+	      }
+	    }
+	  });
 
 	  return this;
 	};
 
-	EditPacket.prototype.removeEdits = function removeEdits() {
-	  // remove edits in editStack from this.editStack
+	/**
+	 * Make a set of patches based on the difference between the
+	 * server text and the shadow text.
+	 *
+	 * @returns {[Patch]} Array of patches.
+	 */
+	ClientData.prototype.makePatches = function makePatches() {
+	  return dmp.patch_make(this.shadow.text, this.contents);
 	};
 
-	module.exports = EditPacket;
+	/**
+	 * Apply the supplied patches to the shadow text. The patches
+	 * __must be in text format__.
+	 *
+	 * @param {[Patch]} textPatches The text patches to apply.
+	 */
+	ClientData.prototype.applyPatches = function applyPatches(textPatches) {
+	  this.shadow.text = dmp.patch_apply(textPatches, this.shadow.text)[0];
+	  return this;
+	};
+
+	/**
+	 * Convert the supplied dmp native patches to text patches. If none
+	 * specified, attempt to make patches.
+	 *
+	 * @param {[Patch]} [patches] The patches to convert to text patches.
+	 * @returns {[Patch]} Array of patches.
+	 */
+	ClientData.prototype.getTextPatches = function getTextPatches(patches) {
+	  if (patches) {
+	    return dmp.patch_toText(patches);
+	  }
+
+	  return dmp.patch_toText(this.makePatches());
+	};
+
+	module.exports = ClientData;
 
 
 /***/ },
@@ -26159,20 +26224,20 @@
 
 	}());
 
-	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(12), __webpack_require__(11).setImmediate))
+	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(13), __webpack_require__(11).setImmediate))
 
 /***/ },
 /* 10 */
 /***/ function(module, exports, __webpack_require__) {
 
-	module.exports = __webpack_require__(13).diff_match_patch;
+	module.exports = __webpack_require__(12).diff_match_patch;
 
 
 /***/ },
 /* 11 */
 /***/ function(module, exports, __webpack_require__) {
 
-	/* WEBPACK VAR INJECTION */(function(setImmediate, clearImmediate) {var nextTick = __webpack_require__(12).nextTick;
+	/* WEBPACK VAR INJECTION */(function(setImmediate, clearImmediate) {var nextTick = __webpack_require__(13).nextTick;
 	var apply = Function.prototype.apply;
 	var slice = Array.prototype.slice;
 	var immediateIds = {};
@@ -26252,102 +26317,6 @@
 
 /***/ },
 /* 12 */
-/***/ function(module, exports, __webpack_require__) {
-
-	// shim for using process in browser
-
-	var process = module.exports = {};
-	var queue = [];
-	var draining = false;
-	var currentQueue;
-	var queueIndex = -1;
-
-	function cleanUpNextTick() {
-	    draining = false;
-	    if (currentQueue.length) {
-	        queue = currentQueue.concat(queue);
-	    } else {
-	        queueIndex = -1;
-	    }
-	    if (queue.length) {
-	        drainQueue();
-	    }
-	}
-
-	function drainQueue() {
-	    if (draining) {
-	        return;
-	    }
-	    var timeout = setTimeout(cleanUpNextTick);
-	    draining = true;
-
-	    var len = queue.length;
-	    while(len) {
-	        currentQueue = queue;
-	        queue = [];
-	        while (++queueIndex < len) {
-	            currentQueue[queueIndex].run();
-	        }
-	        queueIndex = -1;
-	        len = queue.length;
-	    }
-	    currentQueue = null;
-	    draining = false;
-	    clearTimeout(timeout);
-	}
-
-	process.nextTick = function (fun) {
-	    var args = new Array(arguments.length - 1);
-	    if (arguments.length > 1) {
-	        for (var i = 1; i < arguments.length; i++) {
-	            args[i - 1] = arguments[i];
-	        }
-	    }
-	    queue.push(new Item(fun, args));
-	    if (!draining) {
-	        setTimeout(drainQueue, 0);
-	    }
-	};
-
-	// v8 likes predictible objects
-	function Item(fun, array) {
-	    this.fun = fun;
-	    this.array = array;
-	}
-	Item.prototype.run = function () {
-	    this.fun.apply(null, this.array);
-	};
-	process.title = 'browser';
-	process.browser = true;
-	process.env = {};
-	process.argv = [];
-	process.version = ''; // empty string to avoid regexp issues
-	process.versions = {};
-
-	function noop() {}
-
-	process.on = noop;
-	process.addListener = noop;
-	process.once = noop;
-	process.off = noop;
-	process.removeListener = noop;
-	process.removeAllListeners = noop;
-	process.emit = noop;
-
-	process.binding = function (name) {
-	    throw new Error('process.binding is not supported');
-	};
-
-	// TODO(shtylman)
-	process.cwd = function () { return '/' };
-	process.chdir = function (dir) {
-	    throw new Error('process.chdir is not supported');
-	};
-	process.umask = function() { return 0; };
-
-
-/***/ },
-/* 13 */
 /***/ function(module, exports, __webpack_require__) {
 
 	/**
@@ -28624,6 +28593,102 @@
 	this['DIFF_DELETE'] = DIFF_DELETE;
 	this['DIFF_INSERT'] = DIFF_INSERT;
 	this['DIFF_EQUAL'] = DIFF_EQUAL;
+
+
+/***/ },
+/* 13 */
+/***/ function(module, exports, __webpack_require__) {
+
+	// shim for using process in browser
+
+	var process = module.exports = {};
+	var queue = [];
+	var draining = false;
+	var currentQueue;
+	var queueIndex = -1;
+
+	function cleanUpNextTick() {
+	    draining = false;
+	    if (currentQueue.length) {
+	        queue = currentQueue.concat(queue);
+	    } else {
+	        queueIndex = -1;
+	    }
+	    if (queue.length) {
+	        drainQueue();
+	    }
+	}
+
+	function drainQueue() {
+	    if (draining) {
+	        return;
+	    }
+	    var timeout = setTimeout(cleanUpNextTick);
+	    draining = true;
+
+	    var len = queue.length;
+	    while(len) {
+	        currentQueue = queue;
+	        queue = [];
+	        while (++queueIndex < len) {
+	            currentQueue[queueIndex].run();
+	        }
+	        queueIndex = -1;
+	        len = queue.length;
+	    }
+	    currentQueue = null;
+	    draining = false;
+	    clearTimeout(timeout);
+	}
+
+	process.nextTick = function (fun) {
+	    var args = new Array(arguments.length - 1);
+	    if (arguments.length > 1) {
+	        for (var i = 1; i < arguments.length; i++) {
+	            args[i - 1] = arguments[i];
+	        }
+	    }
+	    queue.push(new Item(fun, args));
+	    if (!draining) {
+	        setTimeout(drainQueue, 0);
+	    }
+	};
+
+	// v8 likes predictible objects
+	function Item(fun, array) {
+	    this.fun = fun;
+	    this.array = array;
+	}
+	Item.prototype.run = function () {
+	    this.fun.apply(null, this.array);
+	};
+	process.title = 'browser';
+	process.browser = true;
+	process.env = {};
+	process.argv = [];
+	process.version = ''; // empty string to avoid regexp issues
+	process.versions = {};
+
+	function noop() {}
+
+	process.on = noop;
+	process.addListener = noop;
+	process.once = noop;
+	process.off = noop;
+	process.removeListener = noop;
+	process.removeAllListeners = noop;
+	process.emit = noop;
+
+	process.binding = function (name) {
+	    throw new Error('process.binding is not supported');
+	};
+
+	// TODO(shtylman)
+	process.cwd = function () { return '/' };
+	process.chdir = function (dir) {
+	    throw new Error('process.chdir is not supported');
+	};
+	process.umask = function() { return 0; };
 
 
 /***/ }

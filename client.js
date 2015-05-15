@@ -1,10 +1,8 @@
 var DiffSyncClient = require("dsengine").Client;
 var _ = require("lodash");
 
-
-
 $(document).ready(function() {
-  var client1 = new DiffSyncClient({
+  var client1 = window.client1 = new DiffSyncClient({
     transport: {
       send: function(editPacket) {
         return $.ajax({
@@ -12,8 +10,8 @@ $(document).ready(function() {
           method: "POST",
           dataType: "json",
           data: JSON.stringify({
-            docId: "1",
-            clientId: "abc",
+            docId: "d1",
+            clientId: "c1",
             editPacket: {
               clientVersion: editPacket.clientVersion,
               serverVersion: editPacket.serverVersion,
@@ -34,10 +32,12 @@ $(document).ready(function() {
     client1.startSync($("#client1").val())
       .then(function(editPacket) {
         client1.receiveEdits(editPacket);
+        console.info("Setting client1 contents", client1.clientData.contents);
+        $("#client1").val(client1.clientData.contents);
       });
   });
 
-  var client2 = new DiffSyncClient({
+  var client2 = window.client2 = new DiffSyncClient({
     transport: {
       send: function(editPacket) {
         return $.ajax({
@@ -45,8 +45,8 @@ $(document).ready(function() {
           method: "POST",
           dataType: "json",
           data: JSON.stringify({
-            docId: "1",
-            clientId: "defg",
+            docId: "d1",
+            clientId: "c2",
             editPacket: {
               clientVersion: editPacket.clientVersion,
               serverVersion: editPacket.serverVersion,
@@ -67,8 +67,8 @@ $(document).ready(function() {
     client2.startSync($("#client2").val())
       .then(function(editPacket) {
         client2.receiveEdits(editPacket);
+        console.info("Setting client2 contents", client2.clientData.contents);
+        $("#client2").val(client2.clientData.contents);
       });
   });
-
-  console.log("hello, world!");
 });
