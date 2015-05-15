@@ -5,10 +5,7 @@ var bodyParser = require('body-parser')
 var app = express();
 
 app.use(bodyParser.json());
-
-app.get("/", function(req, res) {
-  res.send("Hello World");
-});
+app.use(express.static('public'));
 
 app.post("/sync", function(req, res) {
   var docId = req.body.docId;
@@ -40,6 +37,6 @@ app.post("/sync", function(req, res) {
   })
 });
 
-app.listen(3000, function() {
+app.listen(3001, function() {
   console.log("Express server listening on port 3000");
 });

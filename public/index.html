@@ -1,0 +1,52 @@
+<!doctype html>
+<html class="no-js" lang="">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <title>Differential Syncronization Demo</title>
+    <meta name="description" content="">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <link rel="stylesheet" href="css/normalize.css">
+    <link rel="stylesheet" href="css/bootstrap.css">
+    <link rel="stylesheet" href="css/bootstrap-theme.css">
+    <link rel="stylesheet" href="css/main.css">
+
+    <script src="js/vendor/modernizr-2.8.3.min.js"></script>
+  </head>
+  <body>
+
+    <div class="jumbotron">
+      <p>Hello world! This is HTML5 Boilerplate.</p>
+    </div>
+
+    <div class="row">
+      <div class="col-sm-6">
+        <div class="form-group">
+           <textarea id="client1" class="form-control" rows="3"></textarea>
+         </div>
+        <button
+          type="button"
+          id="syncClient1"
+          class="btn btn-primary btn-lg btn-block">
+            sync
+        </button>
+      </div>
+      <div class="col-sm-6">
+        <div class="form-group">
+           <textarea id="client2" class="form-control" rows="3"></textarea>
+         </div>
+        <button
+          id="syncClient2"
+          type="button"
+          class="btn btn-primary btn-lg btn-block">
+            sync
+        </button>
+      </div>
+    </div>
+
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js"></script>
+    <script>window.jQuery || document.write('<script src="js/vendor/jquery-1.11.3.min.js"><\/script>')</script>
+    <script src="/js/client.js"></script>
+  </body>
+</html>
