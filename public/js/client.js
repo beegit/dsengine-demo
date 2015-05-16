@@ -87,7 +87,8 @@
 	 * @param clientId
 	 * @constructor
 	 */
-	function DSClientController(docId, clientId) {
+	function DSClientController(docId, element, clientId) {
+
 	  var client = window[clientId] = new DiffSyncClient({
 	    transport: new Transport(docId, clientId),
 	    clientVersion: 0,
@@ -96,9 +97,9 @@
 	    shadow: ""
 	  });
 
-	  this.$button = $("#" + clientId + "-button");
-	  this.$input = $("#" + clientId + "-textarea");
-	  this.$packetList = $("#" + clientId + "-packetList");
+	  this.$button = $("#" + element + "-button");
+	  this.$input = $("#" + element + "-textarea");
+	  this.$packetList = $("#" + element + "-packetList");
 
 	  this.client = client;
 
@@ -111,28 +112,42 @@
 	 * Called to start sync process with server
 	 */
 	DSClientController.prototype.startSync = function() {
-	  this.client.startSync(this.$input.val())
-	    .then(this.updateClient.bind(this));
+	  var _this = this;
+	  var promise = this.client.startSync(this.$input.val());
+
+	  if(promise) {
+	    promise.then(this.updateClient.bind(this))
+	      .fail(function() {
+	        _this.client.syncing = false;
+	      });
+	  }
 	};
+
 	/**
 	 * Called when server responds from sync
 	 * @param editPacket
 	 */
 	DSClientController.prototype.updateClient = function(editPacket) {
-	    this.client.receiveEdits(editPacket);
-	    this.$packetList
-	      .append(
-	      "<li class='list-group-item'><pre>" +
-	        JSON.stringify(editPacket, null, 4) +
-	      "</pre></li>");
-	    this.$input.val(this.client.clientData.contents);
+	  this.client.receiveEdits(editPacket);
+
+	  this.$packetList
+	    .append(
+	    "<li class='list-group-item'><pre>" +
+	      JSON.stringify(editPacket, null, 4) +
+	    "</pre></li>");
+
+	  this.$input.val(this.client.clientData.contents);
 	};
 
 	$(document).ready(function() {
+	  // we are treating each page session like a new client
+	  function getRandomInt(min, max) {
+	    return Math.floor(Math.random() * (max - min + 1)) + min;
+	  }
 
 	  // initialize two clients
-	  new DSClientController("d1", "client1");
-	  new DSClientController("d1", "client2");
+	  new DSClientController("d1", "client1", String(getRandomInt(1, 10000)));
+	  new DSClientController("d1", "client2", String(getRandomInt(1, 10000)));
 	});
 
 
@@ -141,50 +156,135 @@
 /***/ function(module, exports, __webpack_require__) {
 
 	var _ = __webpack_require__(8);
+	var Dmp = __webpack_require__(10);
+	var dmp = new Dmp();
 
 	var defaults = {
-	  serverVersion: 0,
-	  clientVersion: 0
+	  contents: "",
+	  shadow: {
+	    text: "",
+	    clientVersion : 0,
+	    serverVersion: 0
+	  }
 	};
 
 	/**
-	 * EditPacket wraps up messaging between the dsengine client and server
-	 * by passing a stack of edit objects to patch and acknowledging the latest
-	 * versions of each other's data in the appropriate version numbers.
+	 * ClientData encapsulates the text and shadows for each client instance
+	 * and handles diffing/patching responsibilites.
 	 *
-	 * @param {Object} data Edit packet hash
-	 * @param {Number|String} serverVersion The server version #
-	 * @param {Number|String} clientVersion The client version #
-	 * @param {Array} editStack Stack of edits to apply
-	 * @returns {EditPacket}
+	 * @param {String} context Where ClientData is running (client|server)
+	 * @param {Object} options The client data options hash
+	 * @param {String} [options.contents] The shared text
+	 * @param {Object} [options.shadow] Text shadow for this client
+	 * @param {Number} [options.shadow.clientVersion] Client shadow client version #
+	 * @param {Number} [options.shadow.serverVersion] Client shadow server version #
+	 * @param {String} [options.shadow.text] Client shadow text
+	 * @returns {ClientData}
 	 */
-	var EditPacket = function EditPacket(data) {
-	  data = (data || {});
+	var ClientData = function ClientData(options) {
+	  options = (options || {});
 
-	  data.serverVersion = Number(data.serverVersion) || defaults.serverVersion;
-	  data.clientVersion = Number(data.clientVersion) || defaults.clientVersion;
-
-	  if (data.hasOwnProperty("editStack") && !_.isArray(data.editStack)) {
-	    delete data.editStack;
+	  if (options.hasOwnProperty("contents") && !_.isString(options.contents)) {
+	    delete options.contents;
+	  }
+	  if (options.hasOwnProperty("shadow") && !_.isObject(options.shadow)) {
+	    delete options.shadow;
 	  }
 
-	  _.defaults(data, defaults);
-	  data.editStack = (data.editStack || []);
+	  if (options.shadow) {
+	    options.shadow.clientVersion =
+	      Number(options.shadow.clientVersion) || defaults.clientVersion;
 
-	  this.serverVersion = data.serverVersion;
-	  this.clientVersion = data.clientVersion;
-	  this.editStack = data.editStack;
+	    options.shadow.serverVersion =
+	      Number(options.shadow.serverVersion) || defaults.serverVersion;
+	  }
+
+	  _.defaults(options, defaults);
+	  _.defaults(options.shadow, defaults.shadow);
+
+	  // TODO: Pull contents out of here and perform the
+	  // contents => serverText refactor. Updating serverText
+	  // needs to be an atomic operation.
+	  this.contents = options.contents;
+	  this.shadow = {
+	    text: options.shadow.text,
+	    clientVersion: options.shadow.clientVersion,
+	    serverVersion: options.shadow.serverVersion
+	  };
 
 	  return this;
 	};
 
-	EditPacket.prototype.addEdit = function addEdit(edit) {
-	  this.editStack.push(edit);
+
+	/**
+	 * Apply the supplied editstack as patches on top of the shadow text.
+	 *
+	 * @param {Array} editStack The editstack to patch on top of the shadow.
+	 * @returns {ClientData}
+	 */
+	ClientData.prototype.applyEdits = function applyEdits(editStack) {
+	  var _this = this;
+
+	  editStack.map(function(edit) {
+	    if (edit.clientVersion === _this.shadow.clientVersion &&
+	        edit.serverVersion === _this.shadow.serverVersion) {
+	      var patch = dmp.patch_fromText(edit.patch);
+	      _this.patchShadow(patch);
+
+	      _this.patchDocument(patch);
+
+	      _this.incrementVersion();
+	    }
+	  });
 
 	  return this;
 	};
 
-	module.exports = EditPacket;
+	ClientData.prototype.patchShadow = function(patch) {
+	  this.shadow.text = dmp.patch_apply(patch, this.shadow.text)[0];
+	};
+	ClientData.prototype.patchDocument = function(patch) {
+	  this.contents = dmp.patch_apply(patch, this.contents)[0];
+	};
+
+
+	/**
+	 * Make a set of patches based on the difference between the
+	 * server text and the shadow text.
+	 *
+	 * @returns {[Patch]} Array of patches.
+	 */
+	ClientData.prototype.makePatches = function makePatches() {
+	  return dmp.patch_make(this.shadow.text, this.contents);
+	};
+
+	/**
+	 * Apply the supplied patches to the shadow text. The patches
+	 * __must be in text format__.
+	 *
+	 * @param {[Patch]} textPatches The text patches to apply.
+	 */
+	ClientData.prototype.applyPatches = function applyPatches(textPatches) {
+	  this.shadow.text = dmp.patch_apply(textPatches, this.shadow.text)[0];
+	  return this;
+	};
+
+	/**
+	 * Convert the supplied dmp native patches to text patches. If none
+	 * specified, attempt to make patches.
+	 *
+	 * @param {[Patch]} [patches] The patches to convert to text patches.
+	 * @returns {[Patch]} Array of patches.
+	 */
+	ClientData.prototype.getTextPatches = function getTextPatches(patches) {
+	  if (patches) {
+	    return dmp.patch_toText(patches);
+	  }
+
+	  return dmp.patch_toText(this.makePatches());
+	};
+
+	module.exports = ClientData;
 
 
 /***/ },
@@ -12401,8 +12501,8 @@
 /***/ function(module, exports, __webpack_require__) {
 
 	/* WEBPACK VAR INJECTION */(function(module) {var _ = __webpack_require__(8);
-	var ClientData = __webpack_require__(6);
-	var EditPacket = __webpack_require__(1);
+	var ClientData = __webpack_require__(1);
+	var EditPacket = __webpack_require__(6);
 
 
 	ClientClientData = function(options) {
@@ -12469,8 +12569,8 @@
 
 	  var patches = this.clientData.makePatches();
 	  var editPacket = new EditPacket({
-	    clientVersion: this.clientData.clientVersion,
-	    serverVersion: this.clientData.serverVersion,
+	    clientVersion: this.clientData.shadow.clientVersion,
+	    serverVersion: this.clientData.shadow.serverVersion,
 	    editStack: this.editStack
 	  });
 
@@ -12536,8 +12636,8 @@
 
 	var async = __webpack_require__(9);
 	var _ = __webpack_require__(8);
-	var EditPacket = __webpack_require__(1);
-	var ClientData = __webpack_require__(6);
+	var EditPacket = __webpack_require__(6);
+	var ClientData = __webpack_require__(1);
 
 
 
@@ -12616,6 +12716,7 @@
 	    editPacket = new EditPacket(editPacket);
 	  }
 
+
 	  async.waterfall([
 
 	    // Get the client's data for this doc
@@ -12631,6 +12732,7 @@
 
 	    // Clear the edit stack if the versions match
 	    function(clientData, done) {
+	      console.log('clear version? ', editPacket.serverVersion, clientData.shadow.serverVersion);
 	      if (editPacket.serverVersion !== clientData.shadow.serverVersion) {
 	        return done(null, clientData);
 	      }
@@ -12710,6 +12812,7 @@
 
 	      clientData.applyPatches(patches);
 	      clientData.shadow.serverVersion++;
+	      editPacket.serverVersion++;
 
 	      done(null, editPacket, clientData);
 	    },
@@ -12770,135 +12873,50 @@
 /***/ function(module, exports, __webpack_require__) {
 
 	var _ = __webpack_require__(8);
-	var Dmp = __webpack_require__(10);
-	var dmp = new Dmp();
 
 	var defaults = {
-	  contents: "",
-	  shadow: {
-	    text: "",
-	    clientVersion : 0,
-	    serverVersion: 0
-	  }
+	  serverVersion: 0,
+	  clientVersion: 0
 	};
 
 	/**
-	 * ClientData encapsulates the text and shadows for each client instance
-	 * and handles diffing/patching responsibilites.
+	 * EditPacket wraps up messaging between the dsengine client and server
+	 * by passing a stack of edit objects to patch and acknowledging the latest
+	 * versions of each other's data in the appropriate version numbers.
 	 *
-	 * @param {String} context Where ClientData is running (client|server)
-	 * @param {Object} options The client data options hash
-	 * @param {String} [options.contents] The shared text
-	 * @param {Object} [options.shadow] Text shadow for this client
-	 * @param {Number} [options.shadow.clientVersion] Client shadow client version #
-	 * @param {Number} [options.shadow.serverVersion] Client shadow server version #
-	 * @param {String} [options.shadow.text] Client shadow text
-	 * @returns {ClientData}
+	 * @param {Object} data Edit packet hash
+	 * @param {Number|String} serverVersion The server version #
+	 * @param {Number|String} clientVersion The client version #
+	 * @param {Array} editStack Stack of edits to apply
+	 * @returns {EditPacket}
 	 */
-	var ClientData = function ClientData(options) {
-	  options = (options || {});
+	var EditPacket = function EditPacket(data) {
+	  data = (data || {});
 
-	  if (options.hasOwnProperty("contents") && !_.isString(options.contents)) {
-	    delete options.contents;
-	  }
-	  if (options.hasOwnProperty("shadow") && !_.isObject(options.shadow)) {
-	    delete options.shadow;
-	  }
+	  data.serverVersion = Number(data.serverVersion) || defaults.serverVersion;
+	  data.clientVersion = Number(data.clientVersion) || defaults.clientVersion;
 
-	  if (options.shadow) {
-	    options.shadow.clientVersion =
-	      Number(options.shadow.clientVersion) || defaults.clientVersion;
-
-	    options.shadow.serverVersion =
-	      Number(options.shadow.serverVersion) || defaults.serverVersion;
+	  if (data.hasOwnProperty("editStack") && !_.isArray(data.editStack)) {
+	    delete data.editStack;
 	  }
 
-	  _.defaults(options, defaults);
-	  _.defaults(options.shadow, defaults.shadow);
+	  _.defaults(data, defaults);
+	  data.editStack = (data.editStack || []);
 
-	  // TODO: Pull contents out of here and perform the
-	  // contents => serverText refactor. Updating serverText
-	  // needs to be an atomic operation.
-	  this.contents = options.contents;
-	  this.shadow = {
-	    text: options.shadow.text,
-	    clientVersion: options.shadow.clientVersion,
-	    serverVersion: options.shadow.serverVersion
-	  };
+	  this.serverVersion = data.serverVersion;
+	  this.clientVersion = data.clientVersion;
+	  this.editStack = data.editStack;
 
 	  return this;
 	};
 
-
-	/**
-	 * Apply the supplied editstack as patches on top of the shadow text.
-	 *
-	 * @param {Array} editStack The editstack to patch on top of the shadow.
-	 * @returns {ClientData}
-	 */
-	ClientData.prototype.applyEdits = function applyEdits(editStack) {
-	  var _this = this;
-
-	  editStack.map(function(edit) {
-	    if (edit.clientVersion === _this.shadow.clientVersion &&
-	        edit.serverVersion === _this.shadow.serverVersion) {
-	      var patch = dmp.patch_fromText(edit.patch);
-	      _this.patchShadow(patch);
-
-	      _this.patchDocument(patch);
-
-	      _this.incrementVersion();
-	    }
-	  });
+	EditPacket.prototype.addEdit = function addEdit(edit) {
+	  this.editStack.push(edit);
 
 	  return this;
 	};
 
-	ClientData.prototype.patchShadow = function(patch) {
-	  this.shadow.text = dmp.patch_apply(patch, this.shadow.text)[0];
-	};
-	ClientData.prototype.patchDocument = function(patch) {
-	  this.contents = dmp.patch_apply(patch, this.contents)[0];
-	};
-
-
-	/**
-	 * Make a set of patches based on the difference between the
-	 * server text and the shadow text.
-	 *
-	 * @returns {[Patch]} Array of patches.
-	 */
-	ClientData.prototype.makePatches = function makePatches() {
-	  return dmp.patch_make(this.shadow.text, this.contents);
-	};
-
-	/**
-	 * Apply the supplied patches to the shadow text. The patches
-	 * __must be in text format__.
-	 *
-	 * @param {[Patch]} textPatches The text patches to apply.
-	 */
-	ClientData.prototype.applyPatches = function applyPatches(textPatches) {
-	  this.shadow.text = dmp.patch_apply(textPatches, this.shadow.text)[0];
-	  return this;
-	};
-
-	/**
-	 * Convert the supplied dmp native patches to text patches. If none
-	 * specified, attempt to make patches.
-	 *
-	 * @param {[Patch]} [patches] The patches to convert to text patches.
-	 * @returns {[Patch]} Array of patches.
-	 */
-	ClientData.prototype.getTextPatches = function getTextPatches(patches) {
-	  if (patches) {
-	    return dmp.patch_toText(patches);
-	  }
-
-	  return dmp.patch_toText(this.makePatches());
-	};
-
-	module.exports = ClientData;
+	module.exports = EditPacket;
 
 
 /***/ },

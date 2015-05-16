@@ -41,7 +41,8 @@ Transport.prototype.send = function(editPacket) {
  * @param clientId
  * @constructor
  */
-function DSClientController(docId, clientId) {
+function DSClientController(docId, element, clientId) {
+
   var client = window[clientId] = new DiffSyncClient({
     transport: new Transport(docId, clientId),
     clientVersion: 0,
@@ -50,9 +51,9 @@ function DSClientController(docId, clientId) {
     shadow: ""
   });
 
-  this.$button = $("#" + clientId + "-button");
-  this.$input = $("#" + clientId + "-textarea");
-  this.$packetList = $("#" + clientId + "-packetList");
+  this.$button = $("#" + element + "-button");
+  this.$input = $("#" + element + "-textarea");
+  this.$packetList = $("#" + element + "-packetList");
 
   this.client = client;
 
@@ -65,26 +66,40 @@ function DSClientController(docId, clientId) {
  * Called to start sync process with server
  */
 DSClientController.prototype.startSync = function() {
-  this.client.startSync(this.$input.val())
-    .then(this.updateClient.bind(this));
+  var _this = this;
+  var promise = this.client.startSync(this.$input.val());
+
+  if(promise) {
+    promise.then(this.updateClient.bind(this))
+      .fail(function() {
+        _this.client.syncing = false;
+      });
+  }
 };
+
 /**
  * Called when server responds from sync
  * @param editPacket
  */
 DSClientController.prototype.updateClient = function(editPacket) {
-    this.client.receiveEdits(editPacket);
-    this.$packetList
-      .append(
-      "<li class='list-group-item'><pre>" +
-        JSON.stringify(editPacket, null, 4) +
-      "</pre></li>");
-    this.$input.val(this.client.clientData.contents);
+  this.client.receiveEdits(editPacket);
+
+  this.$packetList
+    .append(
+    "<li class='list-group-item'><pre>" +
+      JSON.stringify(editPacket, null, 4) +
+    "</pre></li>");
+
+  this.$input.val(this.client.clientData.contents);
 };
 
 $(document).ready(function() {
+  // we are treating each page session like a new client
+  function getRandomInt(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+  }
 
   // initialize two clients
-  new DSClientController("d1", "client1");
-  new DSClientController("d1", "client2");
+  new DSClientController("d1", "client1", String(getRandomInt(1, 10000)));
+  new DSClientController("d1", "client2", String(getRandomInt(1, 10000)));
 });
