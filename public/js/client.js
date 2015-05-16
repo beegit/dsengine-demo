@@ -47,76 +47,92 @@
 	var DiffSyncClient = __webpack_require__(7).Client;
 	var _ = __webpack_require__(2);
 
+	/**
+	 * Transport for DSClientController's
+	 * @param docId document id
+	 * @param clientId client id
+	 * @constructor
+	 */
+	function Transport(docId, clientId) {
+	  this.docId = docId;
+	  this.clientId = clientId;
+	}
+
+	/**
+	 * called by clientData to sync with server
+	 * @param editPacket
+	 * @returns {*}
+	 */
+	Transport.prototype.send = function(editPacket) {
+	  return $.ajax({
+	    url: "/sync",
+	    method: "POST",
+	    dataType: "json",
+	    contentType: "application/json",
+	    data: JSON.stringify({
+	      docId: this.docId,
+	      clientId: this.clientId,
+	      editPacket: {
+	        clientVersion: editPacket.clientVersion,
+	        serverVersion: editPacket.serverVersion,
+	        editStack: editPacket.editStack
+	      }
+	    })
+	  });
+	};
+
+	/**
+	 * Controller for demo to link DiffSyncClient with DOM
+	 * @param docId
+	 * @param clientId
+	 * @constructor
+	 */
+	function DSClientController(docId, clientId) {
+	  var client = window[clientId] = new DiffSyncClient({
+	    transport: new Transport(docId, clientId),
+	    clientVersion: 0,
+	    serverVersion: 0,
+	    contents: "",
+	    shadow: ""
+	  });
+
+	  this.$button = $("#" + clientId + "-button");
+	  this.$input = $("#" + clientId + "-textarea");
+	  this.$packetList = $("#" + clientId + "-packetList");
+
+	  this.client = client;
+
+	  this.$button.on("click", this.startSync.bind(this));
+
+	  this.startSync();
+	}
+
+	/**
+	 * Called to start sync process with server
+	 */
+	DSClientController.prototype.startSync = function() {
+	  this.client.startSync(this.$input.val())
+	    .then(this.updateClient.bind(this));
+	};
+	/**
+	 * Called when server responds from sync
+	 * @param editPacket
+	 */
+	DSClientController.prototype.updateClient = function(editPacket) {
+	    this.client.receiveEdits(editPacket);
+	    this.$packetList
+	      .append(
+	      "<li class='list-group-item'><pre>" +
+	        JSON.stringify(editPacket, null, 4) +
+	      "</pre></li>");
+	    this.$input.val(this.client.clientData.contents);
+	};
+
 	$(document).ready(function() {
-	  var client1 = window.client1 = new DiffSyncClient({
-	    transport: {
-	      send: function(editPacket) {
-	        return $.ajax({
-	          url: "/sync",
-	          method: "POST",
-	          dataType: "json",
-	          data: JSON.stringify({
-	            docId: "d1",
-	            clientId: "c1",
-	            editPacket: {
-	              clientVersion: editPacket.clientVersion,
-	              serverVersion: editPacket.serverVersion,
-	              editStack: editPacket.editStack
-	            }
-	          }),
-	          contentType: "application/json",
-	        });
-	      }
-	    },
-	    clientVersion: 0,
-	    serverVersion: 0,
-	    contents: "",
-	    shadow: ""
-	  });
 
-	  $("#syncClient1").on("click", function() {
-	    client1.startSync($("#client1").val())
-	      .then(function(editPacket) {
-	        client1.receiveEdits(editPacket);
-	        console.info("Setting client1 contents", client1.clientData.contents);
-	        $("#client1").val(client1.clientData.contents);
-	      });
-	  });
-
-	  var client2 = window.client2 = new DiffSyncClient({
-	    transport: {
-	      send: function(editPacket) {
-	        return $.ajax({
-	          url: "/sync",
-	          method: "POST",
-	          dataType: "json",
-	          data: JSON.stringify({
-	            docId: "d1",
-	            clientId: "c2",
-	            editPacket: {
-	              clientVersion: editPacket.clientVersion,
-	              serverVersion: editPacket.serverVersion,
-	              editStack: editPacket.editStack
-	            }
-	          }),
-	          contentType: "application/json",
-	        });
-	      }
-	    },
-	    clientVersion: 0,
-	    serverVersion: 0,
-	    contents: "",
-	    shadow: ""
-	  });
-
-	  $("#syncClient2").on("click", function() {
-	    client2.startSync($("#client2").val())
-	      .then(function(editPacket) {
-	        client2.receiveEdits(editPacket);
-	        console.info("Setting client2 contents", client2.clientData.contents);
-	        $("#client2").val(client2.clientData.contents);
-	      });
-	  });
+	  // initialize two clients
+	  new DSClientController("d1", "client1");
+	  new DSClientController("d1", "client2");
 	});
 
 
@@ -12388,6 +12404,20 @@
 	var ClientData = __webpack_require__(6);
 	var EditPacket = __webpack_require__(1);
 
+
+	ClientClientData = function(options) {
+	  ClientData.call(this, options);
+
+	  this.contents = options.contents;
+	};
+	ClientClientData.prototype = Object.create(ClientData.prototype);
+	ClientClientData.prototype.constructor = ClientClientData;
+
+	ClientClientData.prototype.incrementVersion = function() {
+	  this.shadow.serverVersion++;
+	}
+
+
 	/**
 	 * DsEngineClient
 	 *
@@ -12410,7 +12440,7 @@
 	    serverVersion: 0
 	  });
 
-	  this.clientData = new ClientData("client", {
+	  this.clientData = new ClientClientData({
 	    contents: opts.contents,
 	    shadow: {
 	      text: opts.shadow.text,
@@ -12509,6 +12539,19 @@
 	var EditPacket = __webpack_require__(1);
 	var ClientData = __webpack_require__(6);
 
+
+
+	ServerClientData = function(options) {
+	  ClientData.call(this, options);
+
+	};
+	ServerClientData.prototype = Object.create(ClientData.prototype);
+	ServerClientData.prototype.constructor = ServerClientData;
+
+	ServerClientData.prototype.incrementVersion = function() {
+	  this.shadow.clientVersion++;
+	}
+
 	/**
 	 * DSEngineServer
 	 *
@@ -12582,7 +12625,7 @@
 	          return done(err);
 	        }
 
-	        done(null, new ClientData("server", clientData));
+	        done(null, new ServerClientData(clientData));
 	      });
 	    },
 
@@ -12636,7 +12679,7 @@
 	        if (err) {
 	          return done(err);
 	        }
-	        done(null, new ClientData("server", clientData));
+	        done(null, new ServerClientData(clientData));
 	      });
 	    },
 
@@ -12752,12 +12795,8 @@
 	 * @param {String} [options.shadow.text] Client shadow text
 	 * @returns {ClientData}
 	 */
-	var ClientData = function ClientData(context, options) {
+	var ClientData = function ClientData(options) {
 	  options = (options || {});
-
-	  if (context !== "client" && context !== "server") {
-	    throw new Error("Client Data requires a context (client|server)");
-	  }
 
 	  if (options.hasOwnProperty("contents") && !_.isString(options.contents)) {
 	    delete options.contents;
@@ -12777,7 +12816,6 @@
 	  _.defaults(options, defaults);
 	  _.defaults(options.shadow, defaults.shadow);
 
-	  this.context = context;
 	  // TODO: Pull contents out of here and perform the
 	  // contents => serverText refactor. Updating serverText
 	  // needs to be an atomic operation.
@@ -12790,6 +12828,7 @@
 
 	  return this;
 	};
+
 
 	/**
 	 * Apply the supplied editstack as patches on top of the shadow text.
@@ -12804,32 +12843,24 @@
 	    if (edit.clientVersion === _this.shadow.clientVersion &&
 	        edit.serverVersion === _this.shadow.serverVersion) {
 	      var patch = dmp.patch_fromText(edit.patch);
-	      var updatedShadow = dmp.patch_apply(patch, _this.shadow.text);
-	      var updatedContents = dmp.patch_apply(patch, _this.contents);
+	      _this.patchShadow(patch);
 
-	      if (!_.isString(updatedShadow[0])) {
-	        // TODO Error handling?
-	      } else {
-	        _this.shadow.text = updatedShadow[0];
-	      }
-	      if (!_.isString(updatedContents[0])) {
-	        // TODO Error handling?
-	      } else {
-	        _this.contents = updatedContents[0];
-	      }
+	      _this.patchDocument(patch);
 
-	      if (_this.context === "client") {
-	        // When the client receives new edits, bump the server #
-	        _this.shadow.serverVersion++;
-	      } else {
-	        // When the server receives new edits, bump the client #
-	        _this.shadow.clientVersion++;
-	      }
+	      _this.incrementVersion();
 	    }
 	  });
 
 	  return this;
 	};
+
+	ClientData.prototype.patchShadow = function(patch) {
+	  this.shadow.text = dmp.patch_apply(patch, this.shadow.text)[0];
+	};
+	ClientData.prototype.patchDocument = function(patch) {
+	  this.contents = dmp.patch_apply(patch, this.contents)[0];
+	};
+
 
 	/**
 	 * Make a set of patches based on the difference between the
@@ -26224,20 +26255,20 @@
 
 	}());
 
-	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(13), __webpack_require__(11).setImmediate))
+	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(12), __webpack_require__(11).setImmediate))
 
 /***/ },
 /* 10 */
 /***/ function(module, exports, __webpack_require__) {
 
-	module.exports = __webpack_require__(12).diff_match_patch;
+	module.exports = __webpack_require__(13).diff_match_patch;
 
 
 /***/ },
 /* 11 */
 /***/ function(module, exports, __webpack_require__) {
 
-	/* WEBPACK VAR INJECTION */(function(setImmediate, clearImmediate) {var nextTick = __webpack_require__(13).nextTick;
+	/* WEBPACK VAR INJECTION */(function(setImmediate, clearImmediate) {var nextTick = __webpack_require__(12).nextTick;
 	var apply = Function.prototype.apply;
 	var slice = Array.prototype.slice;
 	var immediateIds = {};
@@ -26317,6 +26348,102 @@
 
 /***/ },
 /* 12 */
+/***/ function(module, exports, __webpack_require__) {
+
+	// shim for using process in browser
+
+	var process = module.exports = {};
+	var queue = [];
+	var draining = false;
+	var currentQueue;
+	var queueIndex = -1;
+
+	function cleanUpNextTick() {
+	    draining = false;
+	    if (currentQueue.length) {
+	        queue = currentQueue.concat(queue);
+	    } else {
+	        queueIndex = -1;
+	    }
+	    if (queue.length) {
+	        drainQueue();
+	    }
+	}
+
+	function drainQueue() {
+	    if (draining) {
+	        return;
+	    }
+	    var timeout = setTimeout(cleanUpNextTick);
+	    draining = true;
+
+	    var len = queue.length;
+	    while(len) {
+	        currentQueue = queue;
+	        queue = [];
+	        while (++queueIndex < len) {
+	            currentQueue[queueIndex].run();
+	        }
+	        queueIndex = -1;
+	        len = queue.length;
+	    }
+	    currentQueue = null;
+	    draining = false;
+	    clearTimeout(timeout);
+	}
+
+	process.nextTick = function (fun) {
+	    var args = new Array(arguments.length - 1);
+	    if (arguments.length > 1) {
+	        for (var i = 1; i < arguments.length; i++) {
+	            args[i - 1] = arguments[i];
+	        }
+	    }
+	    queue.push(new Item(fun, args));
+	    if (!draining) {
+	        setTimeout(drainQueue, 0);
+	    }
+	};
+
+	// v8 likes predictible objects
+	function Item(fun, array) {
+	    this.fun = fun;
+	    this.array = array;
+	}
+	Item.prototype.run = function () {
+	    this.fun.apply(null, this.array);
+	};
+	process.title = 'browser';
+	process.browser = true;
+	process.env = {};
+	process.argv = [];
+	process.version = ''; // empty string to avoid regexp issues
+	process.versions = {};
+
+	function noop() {}
+
+	process.on = noop;
+	process.addListener = noop;
+	process.once = noop;
+	process.off = noop;
+	process.removeListener = noop;
+	process.removeAllListeners = noop;
+	process.emit = noop;
+
+	process.binding = function (name) {
+	    throw new Error('process.binding is not supported');
+	};
+
+	// TODO(shtylman)
+	process.cwd = function () { return '/' };
+	process.chdir = function (dir) {
+	    throw new Error('process.chdir is not supported');
+	};
+	process.umask = function() { return 0; };
+
+
+/***/ },
+/* 13 */
 /***/ function(module, exports, __webpack_require__) {
 
 	/**
@@ -28593,102 +28720,6 @@
 	this['DIFF_DELETE'] = DIFF_DELETE;
 	this['DIFF_INSERT'] = DIFF_INSERT;
 	this['DIFF_EQUAL'] = DIFF_EQUAL;
-
-
-/***/ },
-/* 13 */
-/***/ function(module, exports, __webpack_require__) {
-
-	// shim for using process in browser
-
-	var process = module.exports = {};
-	var queue = [];
-	var draining = false;
-	var currentQueue;
-	var queueIndex = -1;
-
-	function cleanUpNextTick() {
-	    draining = false;
-	    if (currentQueue.length) {
-	        queue = currentQueue.concat(queue);
-	    } else {
-	        queueIndex = -1;
-	    }
-	    if (queue.length) {
-	        drainQueue();
-	    }
-	}
-
-	function drainQueue() {
-	    if (draining) {
-	        return;
-	    }
-	    var timeout = setTimeout(cleanUpNextTick);
-	    draining = true;
-
-	    var len = queue.length;
-	    while(len) {
-	        currentQueue = queue;
-	        queue = [];
-	        while (++queueIndex < len) {
-	            currentQueue[queueIndex].run();
-	        }
-	        queueIndex = -1;
-	        len = queue.length;
-	    }
-	    currentQueue = null;
-	    draining = false;
-	    clearTimeout(timeout);
-	}
-
-	process.nextTick = function (fun) {
-	    var args = new Array(arguments.length - 1);
-	    if (arguments.length > 1) {
-	        for (var i = 1; i < arguments.length; i++) {
-	            args[i - 1] = arguments[i];
-	        }
-	    }
-	    queue.push(new Item(fun, args));
-	    if (!draining) {
-	        setTimeout(drainQueue, 0);
-	    }
-	};
-
-	// v8 likes predictible objects
-	function Item(fun, array) {
-	    this.fun = fun;
-	    this.array = array;
-	}
-	Item.prototype.run = function () {
-	    this.fun.apply(null, this.array);
-	};
-	process.title = 'browser';
-	process.browser = true;
-	process.env = {};
-	process.argv = [];
-	process.version = ''; // empty string to avoid regexp issues
-	process.versions = {};
-
-	function noop() {}
-
-	process.on = noop;
-	process.addListener = noop;
-	process.once = noop;
-	process.off = noop;
-	process.removeListener = noop;
-	process.removeAllListeners = noop;
-	process.emit = noop;
-
-	process.binding = function (name) {
-	    throw new Error('process.binding is not supported');
-	};
-
-	// TODO(shtylman)
-	process.cwd = function () { return '/' };
-	process.chdir = function (dir) {
-	    throw new Error('process.chdir is not supported');
-	};
-	process.umask = function() { return 0; };
 
 
 /***/ }

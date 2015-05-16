@@ -25,30 +25,33 @@
     <div class="row">
       <div class="col-sm-5 col-sm-offset-1">
         <div class="form-group">
-           <textarea id="client1" class="form-control" rows="3"></textarea>
+           <textarea id="client1-textarea" class="form-control" rows="3"></textarea>
          </div>
         <button
           type="button"
-          id="syncClient1"
+          id="client1-button"
           class="btn btn-primary btn-lg btn-block">
             sync
         </button>
+
+        <ul id="client1-packetList" class="list-group"></ul>
       </div>
       <div class="col-sm-5">
         <div class="form-group">
-           <textarea id="client2" class="form-control" rows="3"></textarea>
+           <textarea id="client2-textarea" class="form-control" rows="3"></textarea>
          </div>
         <button
-          id="syncClient2"
+          id="client2-button"
           type="button"
           class="btn btn-primary btn-lg btn-block">
             sync
         </button>
+
+        <ul id="client2-packetList" class="list-group"></ul>
       </div>
     </div>
 
-    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js"></script>
-    <script>window.jQuery || document.write('<script src="js/vendor/jquery-1.11.3.min.js"><\/script>')</script>
+    <script src="js/vendor/jquery-1.11.3.min.js"></script>
     <script src="/js/client.js"></script>
   </body>
 </html>
