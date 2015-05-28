@@ -3,6 +3,7 @@ var DseRedis = require("dsengine-db-redis");
 var express = require("express");
 var bodyParser = require("body-parser");
 var morgan = require("morgan");
+var USE_DELTA_PATCHING = require("./config").USE_DELTA_PATCHING;
 var app = express();
 
 app.use(bodyParser.json());
@@ -21,7 +22,8 @@ app.post("/sync", function(req, res) {
   var server = new DseServer({
     docId: docId,
     clientId: clientId,
-    db: DseRedis
+    db: DseRedis,
+    useDeltaPatching: USE_DELTA_PATCHING
   });
 
   server.initialize(function(err) {

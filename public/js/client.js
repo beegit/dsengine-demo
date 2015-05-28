@@ -44,8 +44,9 @@
 /* 0 */
 /***/ function(module, exports, __webpack_require__) {
 
-	var DiffSyncClient = __webpack_require__(7).Client;
-	var _ = __webpack_require__(2);
+	var DseClient = __webpack_require__(2).Client;
+	var _ = __webpack_require__(3);
+	var USE_DELTA_PATCHING = __webpack_require__(8).USE_DELTA_PATCHING;
 
 	/**
 	 * Transport for DSClientController's
@@ -82,18 +83,19 @@
 	};
 
 	/**
-	 * Controller for demo to link DiffSyncClient with DOM
+	 * Controller for demo to link DseClient with DOM
 	 * @param docId
 	 * @param clientId
 	 * @constructor
 	 */
 	function DSClientController(docId, element, clientId) {
-	  var client = window[clientId] = new DiffSyncClient({
+	  var client = window[clientId] = new DseClient({
 	    transport: new Transport(docId, clientId),
 	    clientVersion: 0,
 	    serverVersion: 0,
 	    doc: "",
-	    shadow: ""
+	    shadow: "",
+	    useDeltaPatching: USE_DELTA_PATCHING
 	  });
 
 	  this.$button = $("#" + element + "-button");
@@ -114,7 +116,7 @@
 	  if (promise) {
 	    promise.then(this.updateClient.bind(this))
 	      .fail(function() {
-	        _this.client.syncing = false;
+	        _this.client.syncFailed();
 	      });
 	  }
 	};
@@ -135,14 +137,28 @@
 	};
 
 	$(document).ready(function() {
-	  // we are treating each page session like a new client
+	  var clientIds = [];
+
 	  function getRandomInt(min, max) {
 	    return Math.floor(Math.random() * (max - min + 1)) + min;
 	  }
 
-	  // initialize two clients
-	  new DSClientController("d1", "client1", String(getRandomInt(1, 10000)));
-	  new DSClientController("d1", "client2", String(getRandomInt(1, 10000)));
+	  function getClientId() {
+	    var min = 1;
+	    var max = 10000;
+	    var id = getRandomInt(min, max);
+
+	    while (_.contains(clientIds, id)) {
+	      id = getRandomInt(min, max);
+	    }
+
+	    clientIds.push(id);
+	    return id;
+	  }
+
+	  // initialize two clients, we are treating each page session like a new client
+	  new DSClientController("d1", "client1", String(getClientId()));
+	  new DSClientController("d1", "client2", String(getClientId()));
 	});
 
 
@@ -150,7 +166,7 @@
 /* 1 */
 /***/ function(module, exports, __webpack_require__) {
 
-	var _ = __webpack_require__(9);
+	var _ = __webpack_require__(10);
 
 	var defaults = {
 	  serverVersion: 0,
@@ -199,6 +215,23 @@
 
 /***/ },
 /* 2 */
+/***/ function(module, exports, __webpack_require__) {
+
+	/**
+	 *
+	 * To use this library:
+	 *
+	 * var DseClient = require("dsengine").Client;
+	 * var DseServer = require("dsengine").Server;
+	 */
+	module.exports = {
+	  Client: __webpack_require__(4),
+	  Server: __webpack_require__(5)
+	};
+
+
+/***/ },
+/* 3 */
 /***/ function(module, exports, __webpack_require__) {
 
 	var __WEBPACK_AMD_DEFINE_RESULT__;/* WEBPACK VAR INJECTION */(function(module, global) {/**
@@ -12404,51 +12437,55 @@
 	  }
 	}.call(this));
 
-	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(5)(module), (function() { return this; }())))
+	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(6)(module), (function() { return this; }())))
 
 /***/ },
-/* 3 */
+/* 4 */
 /***/ function(module, exports, __webpack_require__) {
 
-	/* WEBPACK VAR INJECTION */(function(module) {var _ = __webpack_require__(9);
-	var ClientShadow = __webpack_require__(6);
+	/* WEBPACK VAR INJECTION */(function(module) {var _ = __webpack_require__(10);
+	var ClientShadow = __webpack_require__(7);
 	var EditPacket = __webpack_require__(1);
 
 	/**
 	 * DsEngineClient
 	 *
-	 * @param opts The options hash
-	 * @param {String} opts.targetId Document id
-	 * @param {String} opts.doc The document to sync
-	 * @param {Number} [opts.clientVersion=0] The starting client version number
-	 * @param {Number} [opts.serverVersion=0] The starting server version number
+	 * @param options The options hash
+	 * @param {String} options.targetId Document id
+	 * @param {String} options.doc The document to sync
+	 * @param {Boolean} [options.useDeltaPatching=true] TRUE for delta, FALSE for text
+	 * @param {Number} [options.clientVersion=0] The starting client version number
+	 * @param {Number} [options.serverVersion=0] The starting server version number
 	 */
-	var DsEngineClient = function DsEngineClient(opts) {
-	  if (!opts) {
+	var DsEngineClient = function DsEngineClient(options) {
+	  if (!options) {
 	    throw new Error("Options are required to initialize dsengine.");
 	  }
-	  if (!_.isString(opts.doc)) {
+	  if (!_.isString(options.doc)) {
 	    throw new Error("Doc is required to initialize dsengine.");
 	  }
 
-	  _.defaults(opts, {
+	  _.defaults(options, {
 	    clientVersion: 0,
-	    serverVersion: 0
-	  });
-
-	  this.shadow = new ClientShadow({
-	    doc: opts.doc,
-	    shadow: {
-	      text: opts.shadow.text,
-	      clientVersion: opts.shadow.clientVersion,
-	      serverVersion: opts.shadow.serverVersion
-	    }
+	    serverVersion: 0,
+	    useDeltaPatching: true
 	  });
 
 	  this.editStack = [];
 	  this.syncing = false;
-	  this.targetId = opts.targetId;
-	  this.transport = opts.transport;
+	  this.targetId = options.targetId;
+	  this.transport = options.transport;
+	  this.useDeltaPatching = options.useDeltaPatching;
+
+	  this.shadow = new ClientShadow({
+	    useDeltaPatching: options.useDeltaPatching,
+	    doc: options.doc,
+	    shadow: {
+	      text: options.shadow.text,
+	      clientVersion: options.shadow.clientVersion,
+	      serverVersion: options.shadow.serverVersion
+	    }
+	  });
 	};
 
 	/**
@@ -12462,19 +12499,21 @@
 	    this.shadow.doc = newDoc;
 	  }
 
-	  var patches = this.shadow.makePatches();
+	  var diffs = this.shadow.calcDiff();
 	  var editPacket = new EditPacket({
 	    clientVersion: this.shadow.shadow.clientVersion,
 	    serverVersion: this.shadow.shadow.serverVersion,
 	    editStack: this.editStack
 	  });
 
-	  if (patches && patches.length > 0) {
+	  if (diffs && diffs.length > 0) {
 	    // Drop the edit onto the edit stack
 	    editPacket.addEdit({
 	      clientVersion: this.shadow.shadow.clientVersion,
 	      serverVersion: this.shadow.shadow.serverVersion,
-	      patch: this.shadow.getTextPatches(patches)
+	      patch: (this.useDeltaPatching) ?
+	        this.shadow.diffsToDelta(diffs) :
+	        this.shadow.diffsToTextPatches(diffs)
 	    });
 
 	    this.shadow.shadow.clientVersion++;
@@ -12485,8 +12524,7 @@
 	  }
 
 	  this.syncing = true;
-
-	  this.shadow.applyPatches(patches);
+	  this.shadow.copyDocToShadow();
 
 	  return this.transport.send(editPacket);
 	};
@@ -12513,6 +12551,14 @@
 	};
 
 	/**
+	 * Handle a failed sync loop of we're told that it failed. This
+	 * is usually handled inside the transport (e.g., If an AJAX call fails).
+	 */
+	DsEngineClient.prototype.syncFailed = function syncFailed() {
+	  this.syncing = false;
+	};
+
+	/**
 	 * Clear out the edit stack since the server has processed the edits.
 	 */
 	DsEngineClient.prototype.clearEdits = function clearEdits() {
@@ -12523,40 +12569,48 @@
 	  module.exports = DsEngineClient;
 	}
 
-	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(5)(module)))
+	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(6)(module)))
 
 /***/ },
-/* 4 */
+/* 5 */
 /***/ function(module, exports, __webpack_require__) {
 
-	var async = __webpack_require__(10);
-	var _ = __webpack_require__(9);
+	var async = __webpack_require__(11);
+	var _ = __webpack_require__(10);
 	var EditPacket = __webpack_require__(1);
-	var ServerShadow = __webpack_require__(8);
+	var ServerShadow = __webpack_require__(9);
 
 	/**
 	 * DSEngineServer
 	 *
-	 * @param opts The options hash
-	 * @param {String} opts.clientId ClientId to store the server shadow per-client
-	 * @param {String} opts.docId The doc id identifying the document to sync
-	 * @param {Object} opts.db The database adapter where the data resides
-	 * @param {Number} [opts.clientVersion=0] The starting client version number
-	 * @param {Number} [opts.serverVersion=0] The starting server version number
+	 * @param options The options hash
+	 * @param {String} options.clientId ClientId to store the server shadow per-client
+	 * @param {String} options.docId The doc id identifying the document to sync
+	 * @param {Object} options.db The database adapter where the data resides
+	 * @param {Boolean} [options.useDeltaPatching=true] TRUE for delta, FALSE for text
+	 * @param {Number} [options.clientVersion=0] The starting client version number
+	 * @param {Number} [options.serverVersion=0] The starting server version number
 	 */
-	var DsEngineServer = function DsEngineServer(opts) {
-	  if (!opts) {
+	var DsEngineServer = function DsEngineServer(options) {
+	  if (!options) {
 	    throw new Error("Options are required to initialize dsengine server.");
 	  }
-	  if (!opts.db) {
+	  if (!options.db) {
 	    throw new Error("A db adapter is required to initialize dsengine server.");
 	  }
 
-	  this.clientId = opts.clientId;
-	  this.docId = opts.docId;
-	  this.db = opts.db(opts.docId, opts.clientId);
-	  this.clientVersion = opts.clientVersion || 0;
-	  this.serverVersion = opts.serverVersion || 0;
+	  _.defaults(options, {
+	    clientVersion: 0,
+	    serverVersion: 0,
+	    useDeltaPatching: true
+	  });
+
+	  this.clientId = options.clientId;
+	  this.docId = options.docId;
+	  this.db = options.db(options.docId, options.clientId);
+	  this.clientVersion = options.clientVersion;
+	  this.serverVersion = options.serverVersion;
+	  this.useDeltaPatching = options.useDeltaPatching;
 	};
 
 	/**
@@ -12609,7 +12663,9 @@
 	          return done(err);
 	        }
 
-	        done(null, new ServerShadow(shadow));
+	        done(null, new ServerShadow(_.extend(shadow, {
+	          useDeltaPatching: _this.useDeltaPatching
+	        })));
 	      });
 	    },
 
@@ -12665,7 +12721,9 @@
 	        if (err) {
 	          return done(err);
 	        }
-	        done(null, new ServerShadow(shadow));
+	        done(null, new ServerShadow(_.extend(shadow, {
+	          useDeltaPatching: _this.useDeltaPatching
+	        })));
 	      });
 	    },
 
@@ -12676,25 +12734,26 @@
 	    },
 
 	    function(shadow, editStack, done) {
-	      var patches = shadow.makePatches();
-
+	      var diffs = shadow.calcDiff();
 	      var editPacket = new EditPacket({
 	        clientVersion: shadow.shadow.clientVersion,
 	        serverVersion: shadow.shadow.serverVersion,
 	        editStack: editStack
 	      });
 
-	      if (!patches || patches.length < 1) {
+	      if (!diffs || diffs.length < 1) {
 	        return done("ok", editPacket);
 	      }
 
 	      editPacket.addEdit({
 	        clientVersion: shadow.shadow.clientVersion,
 	        serverVersion: shadow.shadow.serverVersion,
-	        patch: shadow.getTextPatches(patches)
+	        patch: (_this.useDeltaPatching) ?
+	          shadow.diffsToDelta(diffs) :
+	          shadow.diffsToTextPatches(diffs)
 	      });
 
-	      shadow.applyPatches(patches);
+	      shadow.copyDocToShadow();
 	      shadow.shadow.serverVersion++;
 
 	      done(null, editPacket, shadow);
@@ -12736,7 +12795,7 @@
 
 
 /***/ },
-/* 5 */
+/* 6 */
 /***/ function(module, exports, __webpack_require__) {
 
 	module.exports = function(module) {
@@ -12752,14 +12811,15 @@
 
 
 /***/ },
-/* 6 */
+/* 7 */
 /***/ function(module, exports, __webpack_require__) {
 
-	var _ = __webpack_require__(9);
-	var Dmp = __webpack_require__(11);
+	var _ = __webpack_require__(10);
+	var Dmp = __webpack_require__(12);
 	var dmp = new Dmp();
 
 	var defaults = {
+	  useDeltaPatching: true,
 	  doc: "",
 	  shadow: {
 	    text: "",
@@ -12772,12 +12832,16 @@
 	 * ClientShadow encapsulates the text and shadows for each client instance
 	 * and handles diffing/patching responsibilites.
 	 *
+	 * Inspired by Neil Fraser's MobWrite implementation:
+	 * https://code.google.com/p/google-mobwrite/source/browse/trunk/html/mobwrite_core.js
+	 *
 	 * @param {Object} options The client data options hash
 	 * @param {String} [options.doc] The shared server text of the doc being synced
 	 * @param {Object} [options.shadow] Text shadow for this client
 	 * @param {Number} [options.shadow.clientVersion] Client shadow client version #
 	 * @param {Number} [options.shadow.serverVersion] Client shadow server version #
 	 * @param {String} [options.shadow.text] Client shadow text
+	 * @param {Boolean} [options.useDeltaPatching=true] TRUE for delta, FALSE for text
 	 * @returns {ClientShadow}
 	 */
 	var ClientShadow = function ClientShadow(options) {
@@ -12801,6 +12865,7 @@
 	  _.defaults(options, defaults);
 	  _.defaults(options.shadow, defaults.shadow);
 
+	  this.useDeltaPatching = options.useDeltaPatching;
 	  this.doc = options.doc;
 	  this.shadow = {
 	    text: options.shadow.text,
@@ -12823,20 +12888,27 @@
 	  editStack.map(function(edit) {
 	    if (edit.clientVersion === _this.shadow.clientVersion &&
 	      edit.serverVersion === _this.shadow.serverVersion) {
-	      var patch = dmp.patch_fromText(edit.patch);
-	      var updatedShadow = dmp.patch_apply(patch, _this.shadow.text);
-	      var updatedContents = dmp.patch_apply(patch, _this.doc);
+	      var diffs;
+	      var patches;
 
-	      if (!_.isString(updatedShadow[0])) {
-	        // TODO Error handling?
+	      if (_this.useDeltaPatching) {
+	        diffs = dmp.diff_fromDelta(_this.shadow.text, edit.patch);
+	        patches = dmp.patch_make(_this.shadow.text, diffs);
 	      } else {
-	        _this.shadow.text = updatedShadow[0];
+	        patches = dmp.patch_fromText(edit.patch);
 	      }
-	      if (!_.isString(updatedContents[0])) {
-	        // TODO Error handling?
-	      } else {
-	        _this.doc = updatedContents[0];
+
+	      if (!patches) {
+	        // TODO: Freak out
+	        return;
 	      }
+
+	      // First, update the shadow text for this client
+	      var result = dmp.patch_apply(patches, _this.shadow.text);
+	      _this.shadow.text = result[0];
+
+	      // Second, update the user's text
+	      _this.patchDoc(patches);
 
 	      // When the client receives new edits, bump the server #
 	      _this.shadow.serverVersion++;
@@ -12847,13 +12919,36 @@
 	};
 
 	/**
-	 * Make a set of patches based on the difference between the
-	 * server text and the shadow text.
+	 * Apply the supplied patches to the document text.
 	 *
-	 * @returns {[Patch]} Array of patches.
+	 * @param {[Patch]} patches The patches to apply.
 	 */
-	ClientShadow.prototype.makePatches = function makePatches() {
-	  return dmp.patch_make(this.shadow.text, this.doc);
+	ClientShadow.prototype.patchDoc = function patchDoc(patches) {
+	  var tmpDoc = this.doc;
+	  var result = dmp.patch_apply(patches, tmpDoc);
+	  // Set the new text only if there is a change to be made.
+	  if (tmpDoc != result[0]) {
+	    // The following will probably destroy any cursor or selection.
+	    // Widgets with cursors should override and patch more delicately.
+	    this.doc = result[0];
+	    // TODO: Fire an onDocChanged event
+	  }
+	};
+
+	/**
+	 * Compute the difference between `doc` and the shadow text.
+	 *
+	 * @returns {[Diff]} Array of diffs.
+	 */
+	ClientShadow.prototype.calcDiff = function calcDiff() {
+	  var diffs = dmp.diff_main(this.shadow.text, this.doc, true);
+
+	  if (diffs.length > 2) {
+	    dmp.diff_cleanupSemantic(diffs);
+	    dmp.diff_cleanupEfficiency(diffs);
+	  }
+
+	  return diffs;
 	};
 
 	/**
@@ -12868,49 +12963,74 @@
 	};
 
 	/**
-	 * Convert the supplied dmp native patches to text patches. If none
-	 * specified, attempt to make patches.
+	 * Convert the supplied diffs to patches.
 	 *
-	 * @param {[Patch]} [patches] The patches to convert to text patches.
+	 * @param {[Diff]} diffs The diffs to convert.
 	 * @returns {[Patch]} Array of patches.
 	 */
-	ClientShadow.prototype.getTextPatches = function getTextPatches(patches) {
-	  if (patches) {
-	    return dmp.patch_toText(patches);
+	ClientShadow.prototype.diffsToPatches = function diffsToPatches(diffs) {
+	  if (!diffs || diffs.length < 1) {
+	    return [];
 	  }
-
-	  return dmp.patch_toText(this.makePatches());
+	  return dmp.patch_make(diffs);
 	};
-
-	module.exports = ClientShadow;
-
-
-/***/ },
-/* 7 */
-/***/ function(module, exports, __webpack_require__) {
 
 	/**
+	 * Convert the supplied diffs to a text patch.
 	 *
-	 * To use this library:
-	 *
-	 * var DseClient = require("dsengine").Client;
-	 * var DseServer = require("dsengine").Server;
+	 * @param {[Patch]} diffs The diffs to convert.
+	 * @returns {String} Text patch.
 	 */
-	module.exports = {
-	  Client: __webpack_require__(3),
-	  Server: __webpack_require__(4)
+	ClientShadow.prototype.diffsToTextPatches = function diffsToTextPatches(diffs) {
+	  if (!diffs || diffs.length < 1) {
+	    return "";
+	  }
+	  var patches = this.diffsToPatches(diffs);
+	  return (patches.length > 0) ? dmp.patch_toText(patches) : "";
 	};
+
+	/**
+	 * Convert the supplied diffs to deltas. This optimizes and encodes
+	 * the diffs to a suitable format for the transport layer.
+	 *
+	 * @param {[Diff]} diffs The diffs to convert to a delta.
+	 * @returns {String} Encoded string representing the delta.
+	 */
+	ClientShadow.prototype.diffsToDelta = function diffsToDelta(diffs) {
+	  if (!diffs || diffs.length < 1) {
+	    return "";
+	  }
+	  return dmp.diff_toDelta(diffs);
+	};
+
+	/**
+	 * Copy the document text into the shadow text.
+	 */
+	ClientShadow.prototype.copyDocToShadow = function copyDocToShadow() {
+	  this.shadow.text = this.doc;
+	}
+
+	module.exports = ClientShadow;
 
 
 /***/ },
 /* 8 */
 /***/ function(module, exports, __webpack_require__) {
 
-	var _ = __webpack_require__(9);
-	var Dmp = __webpack_require__(11);
+	module.exports = {
+	  USE_DELTA_PATCHING: true
+	};
+
+/***/ },
+/* 9 */
+/***/ function(module, exports, __webpack_require__) {
+
+	var _ = __webpack_require__(10);
+	var Dmp = __webpack_require__(12);
 	var dmp = new Dmp();
 
 	var defaults = {
+	  useDeltaPatching: true,
 	  doc: "",
 	  shadow: {
 	    text: "",
@@ -12924,11 +13044,12 @@
 	 * and handles diffing/patching responsibilites.
 	 *
 	 * @param {Object} options The client data options hash
-	 * @param {String} [options.doc] The shared server text for the doc being synced
+	 * @param {String} [options.doc] The shared server of the doc being synced
 	 * @param {Object} [options.shadow] Text shadow for this client
 	 * @param {Number} [options.shadow.clientVersion] Client shadow client version #
 	 * @param {Number} [options.shadow.serverVersion] Client shadow server version #
 	 * @param {String} [options.shadow.text] Client shadow text
+	 * @param {Boolean} [options.useDeltaPatching=true] TRUE for delta, FALSE for text
 	 * @returns {ServerShadow}
 	 */
 	var ServerShadow = function ServerShadow(options) {
@@ -12952,6 +13073,7 @@
 	  _.defaults(options, defaults);
 	  _.defaults(options.shadow, defaults.shadow);
 
+	  this.useDeltaPatching = options.useDeltaPatching;
 	  this.doc = options.doc;
 	  this.shadow = {
 	    text: options.shadow.text,
@@ -12974,20 +13096,36 @@
 	  editStack.map(function(edit) {
 	    if (edit.clientVersion === _this.shadow.clientVersion &&
 	      edit.serverVersion === _this.shadow.serverVersion) {
-	      var patch = dmp.patch_fromText(edit.patch);
-	      var updatedShadow = dmp.patch_apply(patch, _this.shadow.text);
-	      var updatedContents = dmp.patch_apply(patch, _this.doc);
+	      var diffs;
+	      var patches;
 
-	      if (!_.isString(updatedShadow[0])) {
-	        // TODO Error handling?
+	      if (_this.useDeltaPatching) {
+	        diffs = dmp.diff_fromDelta(_this.shadow.text, edit.patch);
+	        patches = dmp.patch_make(_this.shadow.text, diffs);
 	      } else {
-	        _this.shadow.text = updatedShadow[0];
+	        patches = dmp.patch_fromText(edit.patch);
 	      }
-	      if (!_.isString(updatedContents[0])) {
-	        // TODO Error handling?
+
+	      if (!patches) {
+	        // TODO: Freak out
+	        return;
+	      }
+
+	      // First, update the shadow text for this client
+	      if (diffs) {
+	        // Use diffs if we have them
+	        _this.shadow.text = dmp.diff_text2(diffs);
 	      } else {
-	        _this.doc = updatedContents[0];
+	        // Otherwise we have to patch the shadow to current
+	        _this.shadow.text = dmp.patch_apply(patches, _this.shadow.text)[0];
 	      }
+
+	      // TODO: Take backup
+	      // _this.backup.text = _this.shadow.text
+	      // _this.backup.serverVersion = _this.shadow.serverVersion
+
+	      // Second, update the server text
+	      _this.patchDoc(patches);
 
 	      // When the server receives new edits, bump the client #
 	      _this.shadow.clientVersion++;
@@ -12998,13 +13136,35 @@
 	};
 
 	/**
-	 * Make a set of patches based on the difference between the
-	 * server text and the shadow text.
+	 * Apply the supplied patches to the document text.
 	 *
-	 * @returns {[Patch]} Array of patches.
+	 * @param {[Patch]} patches The patches to apply.
 	 */
-	ServerShadow.prototype.makePatches = function makePatches() {
-	  return dmp.patch_make(this.shadow.text, this.doc);
+	ServerShadow.prototype.patchDoc = function patchDoc(patches) {
+	  var tmpDoc = this.doc;
+	  var result = dmp.patch_apply(patches, tmpDoc);
+	  // Set the new text only if there is a change to be made.
+	  if (tmpDoc != result[0]) {
+	    // The following will probably destroy any cursor or selection.
+	    // Widgets with cursors should override and patch more delicately.
+	    this.doc = result[0];
+	  }
+	};
+
+	/**
+	 * Compute the difference between `doc` and the shadow text.
+	 *
+	 * @returns {[Diff]} Array of diffs.
+	 */
+	ServerShadow.prototype.calcDiff = function calcDiff() {
+	  var diffs = dmp.diff_main(this.shadow.text, this.doc, true);
+
+	  if (diffs.length > 2) {
+	    dmp.diff_cleanupSemantic(diffs);
+	    dmp.diff_cleanupEfficiency(diffs);
+	  }
+
+	  return diffs;
 	};
 
 	/**
@@ -13019,25 +13179,58 @@
 	};
 
 	/**
-	 * Convert the supplied dmp native patches to text patches. If none
-	 * specified, attempt to make patches.
+	 * Convert the supplied diffs to patches.
 	 *
-	 * @param {[Patch]} [patches] The patches to convert to text patches.
+	 * @param {[Diff]} diffs The diffs to convert.
 	 * @returns {[Patch]} Array of patches.
 	 */
-	ServerShadow.prototype.getTextPatches = function getTextPatches(patches) {
-	  if (patches) {
-	    return dmp.patch_toText(patches);
+	ServerShadow.prototype.diffsToPatches = function diffsToPatches(diffs) {
+	  if (!diffs || diffs.length < 1) {
+	    return [];
 	  }
-
-	  return dmp.patch_toText(this.makePatches());
+	  return dmp.patch_make(diffs);
 	};
+
+	/**
+	 * Convert the supplied diffs to a text patch.
+	 *
+	 * @param {[Patch]} diffs The diffs to convert.
+	 * @returns {String} Text patch.
+	 */
+	ServerShadow.prototype.diffsToTextPatches = function diffsToTextPatches(diffs) {
+	  if (!diffs || diffs.length < 1) {
+	    return "";
+	  }
+	  var patches = this.diffsToPatches(diffs);
+	  return (patches.length > 0) ? dmp.patch_toText(patches) : "";
+	};
+
+	/**
+	 * Convert the supplied diffs to deltas. This optimizes and encodes
+	 * the diffs to a suitable format for the transport layer.
+	 *
+	 * @param {[Diff]} diffs The diffs to convert to a delta.
+	 * @returns {String} Encoded string representing the delta.
+	 */
+	ServerShadow.prototype.diffsToDelta = function diffsToDelta(diffs) {
+	  if (!diffs || diffs.length < 1) {
+	    return "";
+	  }
+	  return dmp.diff_toDelta(diffs);
+	};
+
+	/**
+	 * Copy the document text into the shadow text.
+	 */
+	ServerShadow.prototype.copyDocToShadow = function copyDocToShadow() {
+	  this.shadow.text = this.doc;
+	}
 
 	module.exports = ServerShadow;
 
 
 /***/ },
-/* 9 */
+/* 10 */
 /***/ function(module, exports, __webpack_require__) {
 
 	var __WEBPACK_AMD_DEFINE_RESULT__;/* WEBPACK VAR INJECTION */(function(module, global) {/**
@@ -25243,10 +25436,10 @@
 	  }
 	}.call(this));
 
-	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(5)(module), (function() { return this; }())))
+	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(6)(module), (function() { return this; }())))
 
 /***/ },
-/* 10 */
+/* 11 */
 /***/ function(module, exports, __webpack_require__) {
 
 	var __WEBPACK_AMD_DEFINE_ARRAY__, __WEBPACK_AMD_DEFINE_RESULT__;/* WEBPACK VAR INJECTION */(function(process, setImmediate) {/*!
@@ -26373,17 +26566,17 @@
 
 	}());
 
-	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(12), __webpack_require__(14).setImmediate))
-
-/***/ },
-/* 11 */
-/***/ function(module, exports, __webpack_require__) {
-
-	module.exports = __webpack_require__(13).diff_match_patch;
-
+	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(13), __webpack_require__(14).setImmediate))
 
 /***/ },
 /* 12 */
+/***/ function(module, exports, __webpack_require__) {
+
+	module.exports = __webpack_require__(15).diff_match_patch;
+
+
+/***/ },
+/* 13 */
 /***/ function(module, exports, __webpack_require__) {
 
 	// shim for using process in browser
@@ -26479,7 +26672,89 @@
 
 
 /***/ },
-/* 13 */
+/* 14 */
+/***/ function(module, exports, __webpack_require__) {
+
+	/* WEBPACK VAR INJECTION */(function(setImmediate, clearImmediate) {var nextTick = __webpack_require__(13).nextTick;
+	var apply = Function.prototype.apply;
+	var slice = Array.prototype.slice;
+	var immediateIds = {};
+	var nextImmediateId = 0;
+
+	// DOM APIs, for completeness
+
+	exports.setTimeout = function() {
+	  return new Timeout(apply.call(setTimeout, window, arguments), clearTimeout);
+	};
+	exports.setInterval = function() {
+	  return new Timeout(apply.call(setInterval, window, arguments), clearInterval);
+	};
+	exports.clearTimeout =
+	exports.clearInterval = function(timeout) { timeout.close(); };
+
+	function Timeout(id, clearFn) {
+	  this._id = id;
+	  this._clearFn = clearFn;
+	}
+	Timeout.prototype.unref = Timeout.prototype.ref = function() {};
+	Timeout.prototype.close = function() {
+	  this._clearFn.call(window, this._id);
+	};
+
+	// Does not start the time, just sets up the members needed.
+	exports.enroll = function(item, msecs) {
+	  clearTimeout(item._idleTimeoutId);
+	  item._idleTimeout = msecs;
+	};
+
+	exports.unenroll = function(item) {
+	  clearTimeout(item._idleTimeoutId);
+	  item._idleTimeout = -1;
+	};
+
+	exports._unrefActive = exports.active = function(item) {
+	  clearTimeout(item._idleTimeoutId);
+
+	  var msecs = item._idleTimeout;
+	  if (msecs >= 0) {
+	    item._idleTimeoutId = setTimeout(function onTimeout() {
+	      if (item._onTimeout)
+	        item._onTimeout();
+	    }, msecs);
+	  }
+	};
+
+	// That's not how node.js implements it but the exposed api is the same.
+	exports.setImmediate = typeof setImmediate === "function" ? setImmediate : function(fn) {
+	  var id = nextImmediateId++;
+	  var args = arguments.length < 2 ? false : slice.call(arguments, 1);
+
+	  immediateIds[id] = true;
+
+	  nextTick(function onNextTick() {
+	    if (immediateIds[id]) {
+	      // fn.call() is faster so we optimize for the common use-case
+	      // @see http://jsperf.com/call-apply-segu
+	      if (args) {
+	        fn.apply(null, args);
+	      } else {
+	        fn.call(null);
+	      }
+	      // Prevent ids from leaking
+	      exports.clearImmediate(id);
+	    }
+	  });
+
+	  return id;
+	};
+
+	exports.clearImmediate = typeof clearImmediate === "function" ? clearImmediate : function(id) {
+	  delete immediateIds[id];
+	};
+	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(14).setImmediate, __webpack_require__(14).clearImmediate))
+
+/***/ },
+/* 15 */
 /***/ function(module, exports, __webpack_require__) {
 
 	/**
@@ -28757,88 +29032,6 @@
 	this['DIFF_INSERT'] = DIFF_INSERT;
 	this['DIFF_EQUAL'] = DIFF_EQUAL;
 
-
-/***/ },
-/* 14 */
-/***/ function(module, exports, __webpack_require__) {
-
-	/* WEBPACK VAR INJECTION */(function(setImmediate, clearImmediate) {var nextTick = __webpack_require__(12).nextTick;
-	var apply = Function.prototype.apply;
-	var slice = Array.prototype.slice;
-	var immediateIds = {};
-	var nextImmediateId = 0;
-
-	// DOM APIs, for completeness
-
-	exports.setTimeout = function() {
-	  return new Timeout(apply.call(setTimeout, window, arguments), clearTimeout);
-	};
-	exports.setInterval = function() {
-	  return new Timeout(apply.call(setInterval, window, arguments), clearInterval);
-	};
-	exports.clearTimeout =
-	exports.clearInterval = function(timeout) { timeout.close(); };
-
-	function Timeout(id, clearFn) {
-	  this._id = id;
-	  this._clearFn = clearFn;
-	}
-	Timeout.prototype.unref = Timeout.prototype.ref = function() {};
-	Timeout.prototype.close = function() {
-	  this._clearFn.call(window, this._id);
-	};
-
-	// Does not start the time, just sets up the members needed.
-	exports.enroll = function(item, msecs) {
-	  clearTimeout(item._idleTimeoutId);
-	  item._idleTimeout = msecs;
-	};
-
-	exports.unenroll = function(item) {
-	  clearTimeout(item._idleTimeoutId);
-	  item._idleTimeout = -1;
-	};
-
-	exports._unrefActive = exports.active = function(item) {
-	  clearTimeout(item._idleTimeoutId);
-
-	  var msecs = item._idleTimeout;
-	  if (msecs >= 0) {
-	    item._idleTimeoutId = setTimeout(function onTimeout() {
-	      if (item._onTimeout)
-	        item._onTimeout();
-	    }, msecs);
-	  }
-	};
-
-	// That's not how node.js implements it but the exposed api is the same.
-	exports.setImmediate = typeof setImmediate === "function" ? setImmediate : function(fn) {
-	  var id = nextImmediateId++;
-	  var args = arguments.length < 2 ? false : slice.call(arguments, 1);
-
-	  immediateIds[id] = true;
-
-	  nextTick(function onNextTick() {
-	    if (immediateIds[id]) {
-	      // fn.call() is faster so we optimize for the common use-case
-	      // @see http://jsperf.com/call-apply-segu
-	      if (args) {
-	        fn.apply(null, args);
-	      } else {
-	        fn.call(null);
-	      }
-	      // Prevent ids from leaking
-	      exports.clearImmediate(id);
-	    }
-	  });
-
-	  return id;
-	};
-
-	exports.clearImmediate = typeof clearImmediate === "function" ? clearImmediate : function(id) {
-	  delete immediateIds[id];
-	};
-	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(14).setImmediate, __webpack_require__(14).clearImmediate))
 
 /***/ }
 /******/ ]);

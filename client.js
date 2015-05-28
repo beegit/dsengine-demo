@@ -1,5 +1,6 @@
-var DiffSyncClient = require("dsengine").Client;
+var DseClient = require("dsengine").Client;
 var _ = require("lodash");
+var USE_DELTA_PATCHING = require("./config.js").USE_DELTA_PATCHING;
 
 /**
  * Transport for DSClientController's
@@ -36,18 +37,19 @@ Transport.prototype.send = function(editPacket) {
 };
 
 /**
- * Controller for demo to link DiffSyncClient with DOM
+ * Controller for demo to link DseClient with DOM
  * @param docId
  * @param clientId
  * @constructor
  */
 function DSClientController(docId, element, clientId) {
-  var client = window[clientId] = new DiffSyncClient({
+  var client = window[clientId] = new DseClient({
     transport: new Transport(docId, clientId),
     clientVersion: 0,
     serverVersion: 0,
     doc: "",
-    shadow: ""
+    shadow: "",
+    useDeltaPatching: USE_DELTA_PATCHING
   });
 
   this.$button = $("#" + element + "-button");
@@ -68,7 +70,7 @@ DSClientController.prototype.startSync = function() {
   if (promise) {
     promise.then(this.updateClient.bind(this))
       .fail(function() {
-        _this.client.syncing = false;
+        _this.client.syncFailed();
       });
   }
 };
@@ -89,12 +91,26 @@ DSClientController.prototype.updateClient = function(editPacket) {
 };
 
 $(document).ready(function() {
-  // we are treating each page session like a new client
+  var clientIds = [];
+
   function getRandomInt(min, max) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
   }
 
-  // initialize two clients
-  new DSClientController("d1", "client1", String(getRandomInt(1, 10000)));
-  new DSClientController("d1", "client2", String(getRandomInt(1, 10000)));
+  function getClientId() {
+    var min = 1;
+    var max = 10000;
+    var id = getRandomInt(min, max);
+
+    while (_.contains(clientIds, id)) {
+      id = getRandomInt(min, max);
+    }
+
+    clientIds.push(id);
+    return id;
+  }
+
+  // initialize two clients, we are treating each page session like a new client
+  new DSClientController("d1", "client1", String(getClientId()));
+  new DSClientController("d1", "client2", String(getClientId()));
 });
