@@ -42,23 +42,19 @@ Transport.prototype.send = function(editPacket) {
  * @constructor
  */
 function DSClientController(docId, element, clientId) {
-
   var client = window[clientId] = new DiffSyncClient({
     transport: new Transport(docId, clientId),
     clientVersion: 0,
     serverVersion: 0,
-    contents: "",
+    doc: "",
     shadow: ""
   });
 
   this.$button = $("#" + element + "-button");
   this.$input = $("#" + element + "-textarea");
   this.$packetList = $("#" + element + "-packetList");
-
   this.client = client;
-
   this.$button.on("click", this.startSync.bind(this));
-
   this.startSync();
 }
 
@@ -69,7 +65,7 @@ DSClientController.prototype.startSync = function() {
   var _this = this;
   var promise = this.client.startSync(this.$input.val());
 
-  if(promise) {
+  if (promise) {
     promise.then(this.updateClient.bind(this))
       .fail(function() {
         _this.client.syncing = false;
@@ -84,13 +80,12 @@ DSClientController.prototype.startSync = function() {
 DSClientController.prototype.updateClient = function(editPacket) {
   this.client.receiveEdits(editPacket);
 
-  this.$packetList
-    .append(
+  this.$packetList.prepend(
     "<li class='list-group-item'><pre>" +
       JSON.stringify(editPacket, null, 4) +
     "</pre></li>");
 
-  this.$input.val(this.client.clientData.contents);
+  this.$input.val(this.client.shadow.doc);
 };
 
 $(document).ready(function() {

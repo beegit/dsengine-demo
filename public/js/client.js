@@ -88,23 +88,19 @@
 	 * @constructor
 	 */
 	function DSClientController(docId, element, clientId) {
-
 	  var client = window[clientId] = new DiffSyncClient({
 	    transport: new Transport(docId, clientId),
 	    clientVersion: 0,
 	    serverVersion: 0,
-	    contents: "",
+	    doc: "",
 	    shadow: ""
 	  });
 
 	  this.$button = $("#" + element + "-button");
 	  this.$input = $("#" + element + "-textarea");
 	  this.$packetList = $("#" + element + "-packetList");
-
 	  this.client = client;
-
 	  this.$button.on("click", this.startSync.bind(this));
-
 	  this.startSync();
 	}
 
@@ -115,7 +111,7 @@
 	  var _this = this;
 	  var promise = this.client.startSync(this.$input.val());
 
-	  if(promise) {
+	  if (promise) {
 	    promise.then(this.updateClient.bind(this))
 	      .fail(function() {
 	        _this.client.syncing = false;
@@ -130,13 +126,12 @@
 	DSClientController.prototype.updateClient = function(editPacket) {
 	  this.client.receiveEdits(editPacket);
 
-	  this.$packetList
-	    .append(
+	  this.$packetList.prepend(
 	    "<li class='list-group-item'><pre>" +
 	      JSON.stringify(editPacket, null, 4) +
 	    "</pre></li>");
 
-	  this.$input.val(this.client.clientData.contents);
+	  this.$input.val(this.client.shadow.doc);
 	};
 
 	$(document).ready(function() {
@@ -155,136 +150,51 @@
 /* 1 */
 /***/ function(module, exports, __webpack_require__) {
 
-	var _ = __webpack_require__(8);
-	var Dmp = __webpack_require__(10);
-	var dmp = new Dmp();
+	var _ = __webpack_require__(9);
 
 	var defaults = {
-	  contents: "",
-	  shadow: {
-	    text: "",
-	    clientVersion : 0,
-	    serverVersion: 0
-	  }
+	  serverVersion: 0,
+	  clientVersion: 0
 	};
 
 	/**
-	 * ClientData encapsulates the text and shadows for each client instance
-	 * and handles diffing/patching responsibilites.
+	 * EditPacket wraps up messaging between the dsengine client and server
+	 * by passing a stack of edit objects to patch and acknowledging the latest
+	 * versions of each other's data in the appropriate version numbers.
 	 *
-	 * @param {String} context Where ClientData is running (client|server)
-	 * @param {Object} options The client data options hash
-	 * @param {String} [options.contents] The shared text
-	 * @param {Object} [options.shadow] Text shadow for this client
-	 * @param {Number} [options.shadow.clientVersion] Client shadow client version #
-	 * @param {Number} [options.shadow.serverVersion] Client shadow server version #
-	 * @param {String} [options.shadow.text] Client shadow text
-	 * @returns {ClientData}
+	 * @param {Object} data Edit packet hash
+	 * @param {Number|String} serverVersion The server version #
+	 * @param {Number|String} clientVersion The client version #
+	 * @param {Array} editStack Stack of edits to apply
+	 * @returns {EditPacket}
 	 */
-	var ClientData = function ClientData(options) {
-	  options = (options || {});
+	var EditPacket = function EditPacket(data) {
+	  data = (data || {});
 
-	  if (options.hasOwnProperty("contents") && !_.isString(options.contents)) {
-	    delete options.contents;
-	  }
-	  if (options.hasOwnProperty("shadow") && !_.isObject(options.shadow)) {
-	    delete options.shadow;
-	  }
+	  data.serverVersion = Number(data.serverVersion) || defaults.serverVersion;
+	  data.clientVersion = Number(data.clientVersion) || defaults.clientVersion;
 
-	  if (options.shadow) {
-	    options.shadow.clientVersion =
-	      Number(options.shadow.clientVersion) || defaults.clientVersion;
-
-	    options.shadow.serverVersion =
-	      Number(options.shadow.serverVersion) || defaults.serverVersion;
+	  if (data.hasOwnProperty("editStack") && !_.isArray(data.editStack)) {
+	    delete data.editStack;
 	  }
 
-	  _.defaults(options, defaults);
-	  _.defaults(options.shadow, defaults.shadow);
+	  _.defaults(data, defaults);
+	  data.editStack = (data.editStack || []);
 
-	  // TODO: Pull contents out of here and perform the
-	  // contents => serverText refactor. Updating serverText
-	  // needs to be an atomic operation.
-	  this.contents = options.contents;
-	  this.shadow = {
-	    text: options.shadow.text,
-	    clientVersion: options.shadow.clientVersion,
-	    serverVersion: options.shadow.serverVersion
-	  };
+	  this.serverVersion = data.serverVersion;
+	  this.clientVersion = data.clientVersion;
+	  this.editStack = data.editStack;
 
 	  return this;
 	};
 
-
-	/**
-	 * Apply the supplied editstack as patches on top of the shadow text.
-	 *
-	 * @param {Array} editStack The editstack to patch on top of the shadow.
-	 * @returns {ClientData}
-	 */
-	ClientData.prototype.applyEdits = function applyEdits(editStack) {
-	  var _this = this;
-
-	  editStack.map(function(edit) {
-	    if (edit.clientVersion === _this.shadow.clientVersion &&
-	        edit.serverVersion === _this.shadow.serverVersion) {
-	      var patch = dmp.patch_fromText(edit.patch);
-	      _this.patchShadow(patch);
-
-	      _this.patchDocument(patch);
-
-	      _this.incrementVersion();
-	    }
-	  });
+	EditPacket.prototype.addEdit = function addEdit(edit) {
+	  this.editStack.push(edit);
 
 	  return this;
 	};
 
-	ClientData.prototype.patchShadow = function(patch) {
-	  this.shadow.text = dmp.patch_apply(patch, this.shadow.text)[0];
-	};
-	ClientData.prototype.patchDocument = function(patch) {
-	  this.contents = dmp.patch_apply(patch, this.contents)[0];
-	};
-
-
-	/**
-	 * Make a set of patches based on the difference between the
-	 * server text and the shadow text.
-	 *
-	 * @returns {[Patch]} Array of patches.
-	 */
-	ClientData.prototype.makePatches = function makePatches() {
-	  return dmp.patch_make(this.shadow.text, this.contents);
-	};
-
-	/**
-	 * Apply the supplied patches to the shadow text. The patches
-	 * __must be in text format__.
-	 *
-	 * @param {[Patch]} textPatches The text patches to apply.
-	 */
-	ClientData.prototype.applyPatches = function applyPatches(textPatches) {
-	  this.shadow.text = dmp.patch_apply(textPatches, this.shadow.text)[0];
-	  return this;
-	};
-
-	/**
-	 * Convert the supplied dmp native patches to text patches. If none
-	 * specified, attempt to make patches.
-	 *
-	 * @param {[Patch]} [patches] The patches to convert to text patches.
-	 * @returns {[Patch]} Array of patches.
-	 */
-	ClientData.prototype.getTextPatches = function getTextPatches(patches) {
-	  if (patches) {
-	    return dmp.patch_toText(patches);
-	  }
-
-	  return dmp.patch_toText(this.makePatches());
-	};
-
-	module.exports = ClientData;
+	module.exports = EditPacket;
 
 
 /***/ },
@@ -12500,30 +12410,16 @@
 /* 3 */
 /***/ function(module, exports, __webpack_require__) {
 
-	/* WEBPACK VAR INJECTION */(function(module) {var _ = __webpack_require__(8);
-	var ClientData = __webpack_require__(1);
-	var EditPacket = __webpack_require__(6);
-
-
-	ClientClientData = function(options) {
-	  ClientData.call(this, options);
-
-	  this.contents = options.contents;
-	};
-	ClientClientData.prototype = Object.create(ClientData.prototype);
-	ClientClientData.prototype.constructor = ClientClientData;
-
-	ClientClientData.prototype.incrementVersion = function() {
-	  this.shadow.serverVersion++;
-	}
-
+	/* WEBPACK VAR INJECTION */(function(module) {var _ = __webpack_require__(9);
+	var ClientShadow = __webpack_require__(6);
+	var EditPacket = __webpack_require__(1);
 
 	/**
 	 * DsEngineClient
 	 *
 	 * @param opts The options hash
 	 * @param {String} opts.targetId Document id
-	 * @param {String} opts.contents Contents of the document to sync
+	 * @param {String} opts.doc The document to sync
 	 * @param {Number} [opts.clientVersion=0] The starting client version number
 	 * @param {Number} [opts.serverVersion=0] The starting server version number
 	 */
@@ -12531,8 +12427,8 @@
 	  if (!opts) {
 	    throw new Error("Options are required to initialize dsengine.");
 	  }
-	  if (!_.isString(opts.contents)) {
-	    throw new Error("Contents are required to initialize dsengine.");
+	  if (!_.isString(opts.doc)) {
+	    throw new Error("Doc is required to initialize dsengine.");
 	  }
 
 	  _.defaults(opts, {
@@ -12540,8 +12436,8 @@
 	    serverVersion: 0
 	  });
 
-	  this.clientData = new ClientClientData({
-	    contents: opts.contents,
+	  this.shadow = new ClientShadow({
+	    doc: opts.doc,
 	    shadow: {
 	      text: opts.shadow.text,
 	      clientVersion: opts.shadow.clientVersion,
@@ -12550,7 +12446,6 @@
 	  });
 
 	  this.editStack = [];
-
 	  this.syncing = false;
 	  this.targetId = opts.targetId;
 	  this.transport = opts.transport;
@@ -12559,30 +12454,30 @@
 	/**
 	 * Synchronize any changes in the document with the server.
 	 *
-	 * @param {String} [newContents] New contents to apply to `doc.contents`
-	 * before diffing & syncing
+	 * @param {String} [newDoc] New doc to apply to `doc`
+	 * before diffing & syncing.
 	 */
-	DsEngineClient.prototype.startSync = function startSync(newContents) {
-	  if (_.isString(newContents)) {
-	    this.clientData.contents = newContents;
+	DsEngineClient.prototype.startSync = function startSync(newDoc) {
+	  if (_.isString(newDoc)) {
+	    this.shadow.doc = newDoc;
 	  }
 
-	  var patches = this.clientData.makePatches();
+	  var patches = this.shadow.makePatches();
 	  var editPacket = new EditPacket({
-	    clientVersion: this.clientData.shadow.clientVersion,
-	    serverVersion: this.clientData.shadow.serverVersion,
+	    clientVersion: this.shadow.shadow.clientVersion,
+	    serverVersion: this.shadow.shadow.serverVersion,
 	    editStack: this.editStack
 	  });
 
 	  if (patches && patches.length > 0) {
 	    // Drop the edit onto the edit stack
 	    editPacket.addEdit({
-	      clientVersion: this.clientData.shadow.clientVersion,
-	      serverVersion: this.clientData.shadow.serverVersion,
-	      patch: this.clientData.getTextPatches(patches)
+	      clientVersion: this.shadow.shadow.clientVersion,
+	      serverVersion: this.shadow.shadow.serverVersion,
+	      patch: this.shadow.getTextPatches(patches)
 	    });
 
-	    this.clientData.shadow.clientVersion++;
+	    this.shadow.shadow.clientVersion++;
 	  }
 
 	  if (this.syncing) {
@@ -12591,7 +12486,7 @@
 
 	  this.syncing = true;
 
-	  this.clientData.applyPatches(patches);
+	  this.shadow.applyPatches(patches);
 
 	  return this.transport.send(editPacket);
 	};
@@ -12607,13 +12502,13 @@
 
 	  // Clear the local edit stack if the server ack's that they've
 	  // been processed
-	  if (editPacket.clientVersion === this.clientData.shadow.clientVersion) {
+	  if (editPacket.clientVersion === this.shadow.shadow.clientVersion) {
 	    this.clearEdits();
 	  }
 
 	  // Apply any new edits coming from the server
 	  if (editPacket.editStack && editPacket.editStack.length > 0) {
-	    this.clientData.applyEdits(editPacket.editStack);
+	    this.shadow.applyEdits(editPacket.editStack);
 	  }
 	};
 
@@ -12634,30 +12529,17 @@
 /* 4 */
 /***/ function(module, exports, __webpack_require__) {
 
-	var async = __webpack_require__(9);
-	var _ = __webpack_require__(8);
-	var EditPacket = __webpack_require__(6);
-	var ClientData = __webpack_require__(1);
-
-
-
-	ServerClientData = function(options) {
-	  ClientData.call(this, options);
-
-	};
-	ServerClientData.prototype = Object.create(ClientData.prototype);
-	ServerClientData.prototype.constructor = ServerClientData;
-
-	ServerClientData.prototype.incrementVersion = function() {
-	  this.shadow.clientVersion++;
-	}
+	var async = __webpack_require__(10);
+	var _ = __webpack_require__(9);
+	var EditPacket = __webpack_require__(1);
+	var ServerShadow = __webpack_require__(8);
 
 	/**
 	 * DSEngineServer
 	 *
 	 * @param opts The options hash
 	 * @param {String} opts.clientId ClientId to store the server shadow per-client
-	 * @param {String} opts.docId The contents of the document to sync
+	 * @param {String} opts.docId The doc id identifying the document to sync
 	 * @param {Object} opts.db The database adapter where the data resides
 	 * @param {Number} [opts.clientVersion=0] The starting client version number
 	 * @param {Number} [opts.serverVersion=0] The starting server version number
@@ -12716,47 +12598,49 @@
 	    editPacket = new EditPacket(editPacket);
 	  }
 
+	  // TODO: Acquire db lock
 
 	  async.waterfall([
 
 	    // Get the client's data for this doc
 	    function(done) {
-	      _this.db.get(function(err, clientData) {
+	      _this.db.get(function(err, shadow) {
 	        if (err) {
 	          return done(err);
 	        }
 
-	        done(null, new ServerClientData(clientData));
+	        done(null, new ServerShadow(shadow));
 	      });
 	    },
 
 	    // Clear the edit stack if the versions match
-	    function(clientData, done) {
-	      console.log('clear version? ', editPacket.serverVersion, clientData.shadow.serverVersion);
-	      if (editPacket.serverVersion !== clientData.shadow.serverVersion) {
-	        return done(null, clientData);
+	    function(shadow, done) {
+	      if (editPacket.serverVersion !== shadow.shadow.serverVersion) {
+	        return done(null, shadow);
 	      }
 
 	      _this.db.saveEditStack([], function(err) {
-	        done(err, clientData);
+	        done(err, shadow);
 	      });
 	    },
 
 	    // Apply any edits in the edit stack coming from the client
-	    function(clientData, done) {
+	    function(shadow, done) {
 	      if (!editPacket ||
 	          !editPacket.editStack ||
 	          editPacket.editStack.length < 1) {
-	        return done(null, clientData);
+	        return done(null, shadow);
 	      }
 
-	      clientData.applyEdits(editPacket.editStack);
-	      _this.db.set(clientData, done);
+	      shadow.applyEdits(editPacket.editStack);
+	      _this.db.set(shadow, done);
 	    }
 
 	  ],
 
 	    function(err) {
+	      // TODO: Release db lock
+
 	      if (err) {
 	        return cb(err);
 	      }
@@ -12777,26 +12661,26 @@
 	  async.waterfall([
 
 	    function(done) {
-	      _this.db.get(function(err, clientData) {
+	      _this.db.get(function(err, shadow) {
 	        if (err) {
 	          return done(err);
 	        }
-	        done(null, new ServerClientData(clientData));
+	        done(null, new ServerShadow(shadow));
 	      });
 	    },
 
-	    function(clientData, done) {
+	    function(shadow, done) {
 	      _this.db.getEditStack(function(err, editStack) {
-	        done(err, clientData, editStack);
+	        done(err, shadow, editStack);
 	      });
 	    },
 
-	    function(clientData, editStack, done) {
-	      var patches = clientData.makePatches();
+	    function(shadow, editStack, done) {
+	      var patches = shadow.makePatches();
 
 	      var editPacket = new EditPacket({
-	        clientVersion: clientData.shadow.clientVersion,
-	        serverVersion: clientData.shadow.serverVersion,
+	        clientVersion: shadow.shadow.clientVersion,
+	        serverVersion: shadow.shadow.serverVersion,
 	        editStack: editStack
 	      });
 
@@ -12805,20 +12689,19 @@
 	      }
 
 	      editPacket.addEdit({
-	        clientVersion: clientData.shadow.clientVersion,
-	        serverVersion: clientData.shadow.serverVersion,
-	        patch: clientData.getTextPatches(patches)
+	        clientVersion: shadow.shadow.clientVersion,
+	        serverVersion: shadow.shadow.serverVersion,
+	        patch: shadow.getTextPatches(patches)
 	      });
 
-	      clientData.applyPatches(patches);
-	      clientData.shadow.serverVersion++;
-	      editPacket.serverVersion++;
+	      shadow.applyPatches(patches);
+	      shadow.shadow.serverVersion++;
 
-	      done(null, editPacket, clientData);
+	      done(null, editPacket, shadow);
 	    },
 
-	    function(editPacket, clientData, done) {
-	      _this.db.set(clientData, function(err) {
+	    function(editPacket, shadow, done) {
+	      _this.db.set(shadow, function(err) {
 	        if (err) {
 	          return done(err);
 	        }
@@ -12872,51 +12755,134 @@
 /* 6 */
 /***/ function(module, exports, __webpack_require__) {
 
-	var _ = __webpack_require__(8);
+	var _ = __webpack_require__(9);
+	var Dmp = __webpack_require__(11);
+	var dmp = new Dmp();
 
 	var defaults = {
-	  serverVersion: 0,
-	  clientVersion: 0
+	  doc: "",
+	  shadow: {
+	    text: "",
+	    clientVersion : 0,
+	    serverVersion: 0
+	  }
 	};
 
 	/**
-	 * EditPacket wraps up messaging between the dsengine client and server
-	 * by passing a stack of edit objects to patch and acknowledging the latest
-	 * versions of each other's data in the appropriate version numbers.
+	 * ClientShadow encapsulates the text and shadows for each client instance
+	 * and handles diffing/patching responsibilites.
 	 *
-	 * @param {Object} data Edit packet hash
-	 * @param {Number|String} serverVersion The server version #
-	 * @param {Number|String} clientVersion The client version #
-	 * @param {Array} editStack Stack of edits to apply
-	 * @returns {EditPacket}
+	 * @param {Object} options The client data options hash
+	 * @param {String} [options.doc] The shared server text of the doc being synced
+	 * @param {Object} [options.shadow] Text shadow for this client
+	 * @param {Number} [options.shadow.clientVersion] Client shadow client version #
+	 * @param {Number} [options.shadow.serverVersion] Client shadow server version #
+	 * @param {String} [options.shadow.text] Client shadow text
+	 * @returns {ClientShadow}
 	 */
-	var EditPacket = function EditPacket(data) {
-	  data = (data || {});
+	var ClientShadow = function ClientShadow(options) {
+	  options = (options || {});
 
-	  data.serverVersion = Number(data.serverVersion) || defaults.serverVersion;
-	  data.clientVersion = Number(data.clientVersion) || defaults.clientVersion;
-
-	  if (data.hasOwnProperty("editStack") && !_.isArray(data.editStack)) {
-	    delete data.editStack;
+	  if (options.hasOwnProperty("doc") && !_.isString(options.doc)) {
+	    delete options.doc;
+	  }
+	  if (options.hasOwnProperty("shadow") && !_.isObject(options.shadow)) {
+	    delete options.shadow;
 	  }
 
-	  _.defaults(data, defaults);
-	  data.editStack = (data.editStack || []);
+	  if (options.shadow) {
+	    options.shadow.clientVersion =
+	      Number(options.shadow.clientVersion) || defaults.clientVersion;
 
-	  this.serverVersion = data.serverVersion;
-	  this.clientVersion = data.clientVersion;
-	  this.editStack = data.editStack;
+	    options.shadow.serverVersion =
+	      Number(options.shadow.serverVersion) || defaults.serverVersion;
+	  }
+
+	  _.defaults(options, defaults);
+	  _.defaults(options.shadow, defaults.shadow);
+
+	  this.doc = options.doc;
+	  this.shadow = {
+	    text: options.shadow.text,
+	    clientVersion: options.shadow.clientVersion,
+	    serverVersion: options.shadow.serverVersion
+	  };
 
 	  return this;
 	};
 
-	EditPacket.prototype.addEdit = function addEdit(edit) {
-	  this.editStack.push(edit);
+	/**
+	 * Apply the supplied editstack as patches on top of the shadow text.
+	 *
+	 * @param {Array} editStack The editstack to patch on top of the shadow.
+	 * @returns {ClientShadow}
+	 */
+	ClientShadow.prototype.applyEdits = function applyEdits(editStack) {
+	  var _this = this;
+
+	  editStack.map(function(edit) {
+	    if (edit.clientVersion === _this.shadow.clientVersion &&
+	      edit.serverVersion === _this.shadow.serverVersion) {
+	      var patch = dmp.patch_fromText(edit.patch);
+	      var updatedShadow = dmp.patch_apply(patch, _this.shadow.text);
+	      var updatedContents = dmp.patch_apply(patch, _this.doc);
+
+	      if (!_.isString(updatedShadow[0])) {
+	        // TODO Error handling?
+	      } else {
+	        _this.shadow.text = updatedShadow[0];
+	      }
+	      if (!_.isString(updatedContents[0])) {
+	        // TODO Error handling?
+	      } else {
+	        _this.doc = updatedContents[0];
+	      }
+
+	      // When the client receives new edits, bump the server #
+	      _this.shadow.serverVersion++;
+	    }
+	  });
 
 	  return this;
 	};
 
-	module.exports = EditPacket;
+	/**
+	 * Make a set of patches based on the difference between the
+	 * server text and the shadow text.
+	 *
+	 * @returns {[Patch]} Array of patches.
+	 */
+	ClientShadow.prototype.makePatches = function makePatches() {
+	  return dmp.patch_make(this.shadow.text, this.doc);
+	};
+
+	/**
+	 * Apply the supplied patches to the shadow text. The patches
+	 * __must be in text format__.
+	 *
+	 * @param {[Patch]} textPatches The text patches to apply.
+	 */
+	ClientShadow.prototype.applyPatches = function applyPatches(textPatches) {
+	  this.shadow.text = dmp.patch_apply(textPatches, this.shadow.text)[0];
+	  return this;
+	};
+
+	/**
+	 * Convert the supplied dmp native patches to text patches. If none
+	 * specified, attempt to make patches.
+	 *
+	 * @param {[Patch]} [patches] The patches to convert to text patches.
+	 * @returns {[Patch]} Array of patches.
+	 */
+	ClientShadow.prototype.getTextPatches = function getTextPatches(patches) {
+	  if (patches) {
+	    return dmp.patch_toText(patches);
+	  }
+
+	  return dmp.patch_toText(this.makePatches());
+	};
+
+	module.exports = ClientShadow;
 
 
 /***/ },
@@ -12938,6 +12904,140 @@
 
 /***/ },
 /* 8 */
+/***/ function(module, exports, __webpack_require__) {
+
+	var _ = __webpack_require__(9);
+	var Dmp = __webpack_require__(11);
+	var dmp = new Dmp();
+
+	var defaults = {
+	  doc: "",
+	  shadow: {
+	    text: "",
+	    clientVersion : 0,
+	    serverVersion: 0
+	  }
+	};
+
+	/**
+	 * ServerShadow encapsulates the text and shadows for each client instance
+	 * and handles diffing/patching responsibilites.
+	 *
+	 * @param {Object} options The client data options hash
+	 * @param {String} [options.doc] The shared server text for the doc being synced
+	 * @param {Object} [options.shadow] Text shadow for this client
+	 * @param {Number} [options.shadow.clientVersion] Client shadow client version #
+	 * @param {Number} [options.shadow.serverVersion] Client shadow server version #
+	 * @param {String} [options.shadow.text] Client shadow text
+	 * @returns {ServerShadow}
+	 */
+	var ServerShadow = function ServerShadow(options) {
+	  options = (options || {});
+
+	  if (options.hasOwnProperty("doc") && !_.isString(options.doc)) {
+	    delete options.doc;
+	  }
+	  if (options.hasOwnProperty("shadow") && !_.isObject(options.shadow)) {
+	    delete options.shadow;
+	  }
+
+	  if (options.shadow) {
+	    options.shadow.clientVersion =
+	      Number(options.shadow.clientVersion) || defaults.clientVersion;
+
+	    options.shadow.serverVersion =
+	      Number(options.shadow.serverVersion) || defaults.serverVersion;
+	  }
+
+	  _.defaults(options, defaults);
+	  _.defaults(options.shadow, defaults.shadow);
+
+	  this.doc = options.doc;
+	  this.shadow = {
+	    text: options.shadow.text,
+	    clientVersion: options.shadow.clientVersion,
+	    serverVersion: options.shadow.serverVersion
+	  };
+
+	  return this;
+	};
+
+	/**
+	 * Apply the supplied editstack as patches on top of the shadow text.
+	 *
+	 * @param {Array} editStack The editstack to patch on top of the shadow.
+	 * @returns {ServerShadow}
+	 */
+	ServerShadow.prototype.applyEdits = function applyEdits(editStack) {
+	  var _this = this;
+
+	  editStack.map(function(edit) {
+	    if (edit.clientVersion === _this.shadow.clientVersion &&
+	      edit.serverVersion === _this.shadow.serverVersion) {
+	      var patch = dmp.patch_fromText(edit.patch);
+	      var updatedShadow = dmp.patch_apply(patch, _this.shadow.text);
+	      var updatedContents = dmp.patch_apply(patch, _this.doc);
+
+	      if (!_.isString(updatedShadow[0])) {
+	        // TODO Error handling?
+	      } else {
+	        _this.shadow.text = updatedShadow[0];
+	      }
+	      if (!_.isString(updatedContents[0])) {
+	        // TODO Error handling?
+	      } else {
+	        _this.doc = updatedContents[0];
+	      }
+
+	      // When the server receives new edits, bump the client #
+	      _this.shadow.clientVersion++;
+	    }
+	  });
+
+	  return this;
+	};
+
+	/**
+	 * Make a set of patches based on the difference between the
+	 * server text and the shadow text.
+	 *
+	 * @returns {[Patch]} Array of patches.
+	 */
+	ServerShadow.prototype.makePatches = function makePatches() {
+	  return dmp.patch_make(this.shadow.text, this.doc);
+	};
+
+	/**
+	 * Apply the supplied patches to the shadow text. The patches
+	 * __must be in text format__.
+	 *
+	 * @param {[Patch]} textPatches The text patches to apply.
+	 */
+	ServerShadow.prototype.applyPatches = function applyPatches(textPatches) {
+	  this.shadow.text = dmp.patch_apply(textPatches, this.shadow.text)[0];
+	  return this;
+	};
+
+	/**
+	 * Convert the supplied dmp native patches to text patches. If none
+	 * specified, attempt to make patches.
+	 *
+	 * @param {[Patch]} [patches] The patches to convert to text patches.
+	 * @returns {[Patch]} Array of patches.
+	 */
+	ServerShadow.prototype.getTextPatches = function getTextPatches(patches) {
+	  if (patches) {
+	    return dmp.patch_toText(patches);
+	  }
+
+	  return dmp.patch_toText(this.makePatches());
+	};
+
+	module.exports = ServerShadow;
+
+
+/***/ },
+/* 9 */
 /***/ function(module, exports, __webpack_require__) {
 
 	var __WEBPACK_AMD_DEFINE_RESULT__;/* WEBPACK VAR INJECTION */(function(module, global) {/**
@@ -25146,7 +25246,7 @@
 	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(5)(module), (function() { return this; }())))
 
 /***/ },
-/* 9 */
+/* 10 */
 /***/ function(module, exports, __webpack_require__) {
 
 	var __WEBPACK_AMD_DEFINE_ARRAY__, __WEBPACK_AMD_DEFINE_RESULT__;/* WEBPACK VAR INJECTION */(function(process, setImmediate) {/*!
@@ -26273,96 +26373,14 @@
 
 	}());
 
-	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(12), __webpack_require__(11).setImmediate))
-
-/***/ },
-/* 10 */
-/***/ function(module, exports, __webpack_require__) {
-
-	module.exports = __webpack_require__(13).diff_match_patch;
-
+	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(12), __webpack_require__(14).setImmediate))
 
 /***/ },
 /* 11 */
 /***/ function(module, exports, __webpack_require__) {
 
-	/* WEBPACK VAR INJECTION */(function(setImmediate, clearImmediate) {var nextTick = __webpack_require__(12).nextTick;
-	var apply = Function.prototype.apply;
-	var slice = Array.prototype.slice;
-	var immediateIds = {};
-	var nextImmediateId = 0;
+	module.exports = __webpack_require__(13).diff_match_patch;
 
-	// DOM APIs, for completeness
-
-	exports.setTimeout = function() {
-	  return new Timeout(apply.call(setTimeout, window, arguments), clearTimeout);
-	};
-	exports.setInterval = function() {
-	  return new Timeout(apply.call(setInterval, window, arguments), clearInterval);
-	};
-	exports.clearTimeout =
-	exports.clearInterval = function(timeout) { timeout.close(); };
-
-	function Timeout(id, clearFn) {
-	  this._id = id;
-	  this._clearFn = clearFn;
-	}
-	Timeout.prototype.unref = Timeout.prototype.ref = function() {};
-	Timeout.prototype.close = function() {
-	  this._clearFn.call(window, this._id);
-	};
-
-	// Does not start the time, just sets up the members needed.
-	exports.enroll = function(item, msecs) {
-	  clearTimeout(item._idleTimeoutId);
-	  item._idleTimeout = msecs;
-	};
-
-	exports.unenroll = function(item) {
-	  clearTimeout(item._idleTimeoutId);
-	  item._idleTimeout = -1;
-	};
-
-	exports._unrefActive = exports.active = function(item) {
-	  clearTimeout(item._idleTimeoutId);
-
-	  var msecs = item._idleTimeout;
-	  if (msecs >= 0) {
-	    item._idleTimeoutId = setTimeout(function onTimeout() {
-	      if (item._onTimeout)
-	        item._onTimeout();
-	    }, msecs);
-	  }
-	};
-
-	// That's not how node.js implements it but the exposed api is the same.
-	exports.setImmediate = typeof setImmediate === "function" ? setImmediate : function(fn) {
-	  var id = nextImmediateId++;
-	  var args = arguments.length < 2 ? false : slice.call(arguments, 1);
-
-	  immediateIds[id] = true;
-
-	  nextTick(function onNextTick() {
-	    if (immediateIds[id]) {
-	      // fn.call() is faster so we optimize for the common use-case
-	      // @see http://jsperf.com/call-apply-segu
-	      if (args) {
-	        fn.apply(null, args);
-	      } else {
-	        fn.call(null);
-	      }
-	      // Prevent ids from leaking
-	      exports.clearImmediate(id);
-	    }
-	  });
-
-	  return id;
-	};
-
-	exports.clearImmediate = typeof clearImmediate === "function" ? clearImmediate : function(id) {
-	  delete immediateIds[id];
-	};
-	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(11).setImmediate, __webpack_require__(11).clearImmediate))
 
 /***/ },
 /* 12 */
@@ -28739,6 +28757,88 @@
 	this['DIFF_INSERT'] = DIFF_INSERT;
 	this['DIFF_EQUAL'] = DIFF_EQUAL;
 
+
+/***/ },
+/* 14 */
+/***/ function(module, exports, __webpack_require__) {
+
+	/* WEBPACK VAR INJECTION */(function(setImmediate, clearImmediate) {var nextTick = __webpack_require__(12).nextTick;
+	var apply = Function.prototype.apply;
+	var slice = Array.prototype.slice;
+	var immediateIds = {};
+	var nextImmediateId = 0;
+
+	// DOM APIs, for completeness
+
+	exports.setTimeout = function() {
+	  return new Timeout(apply.call(setTimeout, window, arguments), clearTimeout);
+	};
+	exports.setInterval = function() {
+	  return new Timeout(apply.call(setInterval, window, arguments), clearInterval);
+	};
+	exports.clearTimeout =
+	exports.clearInterval = function(timeout) { timeout.close(); };
+
+	function Timeout(id, clearFn) {
+	  this._id = id;
+	  this._clearFn = clearFn;
+	}
+	Timeout.prototype.unref = Timeout.prototype.ref = function() {};
+	Timeout.prototype.close = function() {
+	  this._clearFn.call(window, this._id);
+	};
+
+	// Does not start the time, just sets up the members needed.
+	exports.enroll = function(item, msecs) {
+	  clearTimeout(item._idleTimeoutId);
+	  item._idleTimeout = msecs;
+	};
+
+	exports.unenroll = function(item) {
+	  clearTimeout(item._idleTimeoutId);
+	  item._idleTimeout = -1;
+	};
+
+	exports._unrefActive = exports.active = function(item) {
+	  clearTimeout(item._idleTimeoutId);
+
+	  var msecs = item._idleTimeout;
+	  if (msecs >= 0) {
+	    item._idleTimeoutId = setTimeout(function onTimeout() {
+	      if (item._onTimeout)
+	        item._onTimeout();
+	    }, msecs);
+	  }
+	};
+
+	// That's not how node.js implements it but the exposed api is the same.
+	exports.setImmediate = typeof setImmediate === "function" ? setImmediate : function(fn) {
+	  var id = nextImmediateId++;
+	  var args = arguments.length < 2 ? false : slice.call(arguments, 1);
+
+	  immediateIds[id] = true;
+
+	  nextTick(function onNextTick() {
+	    if (immediateIds[id]) {
+	      // fn.call() is faster so we optimize for the common use-case
+	      // @see http://jsperf.com/call-apply-segu
+	      if (args) {
+	        fn.apply(null, args);
+	      } else {
+	        fn.call(null);
+	      }
+	      // Prevent ids from leaking
+	      exports.clearImmediate(id);
+	    }
+	  });
+
+	  return id;
+	};
+
+	exports.clearImmediate = typeof clearImmediate === "function" ? clearImmediate : function(id) {
+	  delete immediateIds[id];
+	};
+	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(14).setImmediate, __webpack_require__(14).clearImmediate))
 
 /***/ }
 /******/ ]);
