@@ -74,8 +74,7 @@
 	      docId: this.docId,
 	      clientId: this.clientId,
 	      editPacket: {
-	        clientVersion: editPacket.clientVersion,
-	        serverVersion: editPacket.serverVersion,
+	        v: editPacket.v,
 	        editStack: editPacket.editStack
 	      }
 	    })
@@ -91,10 +90,7 @@
 	function DSClientController(docId, element, clientId) {
 	  var client = window[clientId] = new DseClient({
 	    transport: new Transport(docId, clientId),
-	    clientVersion: 0,
-	    serverVersion: 0,
 	    doc: "",
-	    shadow: "",
 	    useDeltaPatching: USE_DELTA_PATCHING
 	  });
 
@@ -169,8 +165,8 @@
 	var _ = __webpack_require__(10);
 
 	var defaults = {
-	  serverVersion: 0,
-	  clientVersion: 0
+	  mode: "d",
+	  v: 0
 	};
 
 	/**
@@ -179,31 +175,43 @@
 	 * versions of each other's data in the appropriate version numbers.
 	 *
 	 * @param {Object} data Edit packet hash
-	 * @param {Number|String} serverVersion The server version #
-	 * @param {Number|String} clientVersion The client version #
+	 * @param {Number} v  When `client=>server`, the serverVersion. When
+	 *                    `server=>client`, the clientVersion.
 	 * @param {Array} editStack Stack of edits to apply
 	 * @returns {EditPacket}
 	 */
 	var EditPacket = function EditPacket(data) {
 	  data = (data || {});
 
-	  data.serverVersion = Number(data.serverVersion) || defaults.serverVersion;
-	  data.clientVersion = Number(data.clientVersion) || defaults.clientVersion;
-
 	  if (data.hasOwnProperty("editStack") && !_.isArray(data.editStack)) {
 	    delete data.editStack;
 	  }
 
 	  _.defaults(data, defaults);
+
+	  if (!_.isNumber(data.v)) {
+	    data.v = Number(data.v);
+	  }
+
 	  data.editStack = (data.editStack || []);
 
-	  this.serverVersion = data.serverVersion;
-	  this.clientVersion = data.clientVersion;
+	  this.v = data.v;
 	  this.editStack = data.editStack;
 
 	  return this;
 	};
 
+	/**
+	 * Push an edit action onto the edit stack.
+	 *
+	 * @param {Object} edit The edit hash.
+	 * @param {String} edit.mode The mode describing the action to take (d=delta|r=raw).
+	 * @param {Number} edit.clientVersion The client version # this edit goes on top of.
+	 * @param {Number} edit.serverVersion The server version # this edit goes on top of.
+	 * @param {String} [edit.patch] Delta mode: The delta to apply.
+	 * @param {String} [edit.doc] Raw mode: The raw doc text to set.
+	 * @returns {EditPacket}
+	 */
 	EditPacket.prototype.addEdit = function addEdit(edit) {
 	  this.editStack.push(edit);
 
@@ -12446,6 +12454,9 @@
 	/* WEBPACK VAR INJECTION */(function(module) {var _ = __webpack_require__(10);
 	var ClientShadow = __webpack_require__(7);
 	var EditPacket = __webpack_require__(1);
+	var DIFF_EQUAL = 0;
+	//var DIFF_DELETE = -1;
+	//var DIFF_INSERT = 1;
 
 	/**
 	 * DsEngineClient
@@ -12454,8 +12465,6 @@
 	 * @param {String} options.targetId Document id
 	 * @param {String} options.doc The document to sync
 	 * @param {Boolean} [options.useDeltaPatching=true] TRUE for delta, FALSE for text
-	 * @param {Number} [options.clientVersion=0] The starting client version number
-	 * @param {Number} [options.serverVersion=0] The starting server version number
 	 */
 	var DsEngineClient = function DsEngineClient(options) {
 	  if (!options) {
@@ -12466,8 +12475,6 @@
 	  }
 
 	  _.defaults(options, {
-	    clientVersion: 0,
-	    serverVersion: 0,
 	    useDeltaPatching: true
 	  });
 
@@ -12476,15 +12483,11 @@
 	  this.targetId = options.targetId;
 	  this.transport = options.transport;
 	  this.useDeltaPatching = options.useDeltaPatching;
+	  this.deltaOk = false;
 
 	  this.shadow = new ClientShadow({
 	    useDeltaPatching: options.useDeltaPatching,
-	    doc: options.doc,
-	    shadow: {
-	      text: options.shadow.text,
-	      clientVersion: options.shadow.clientVersion,
-	      serverVersion: options.shadow.serverVersion
-	    }
+	    doc: options.doc
 	  });
 	};
 
@@ -12499,24 +12502,51 @@
 	    this.shadow.doc = newDoc;
 	  }
 
-	  var diffs = this.shadow.calcDiff();
 	  var editPacket = new EditPacket({
-	    clientVersion: this.shadow.shadow.clientVersion,
-	    serverVersion: this.shadow.shadow.serverVersion,
+	    v: this.shadow.shadow.serverVersion,
 	    editStack: this.editStack
 	  });
 
-	  if (diffs && diffs.length > 0) {
-	    // Drop the edit onto the edit stack
+	  if (this.deltaOk) {
+	    // The last delta postback from the server was successful, so
+	    // sync in delta mode.
+	    var diffs = this.shadow.calcDiff();
+	    var changed = diffs.length !== 1 || diffs[0][0] !== DIFF_EQUAL;
+
+	    if (changed) {
+	      this.shadow.copyDocToShadow();
+	    }
+
+	    if (changed || !this.editStack.length) {
+	      // Drop the edit onto the edit stack
+	      editPacket.addEdit({
+	        mode: "d",
+	        clientVersion: this.shadow.shadow.clientVersion,
+	        serverVersion: this.shadow.shadow.serverVersion,
+	        patch: (this.useDeltaPatching) ?
+	          this.shadow.diffsToDelta(diffs) :
+	          this.shadow.diffsToTextPatches(diffs)
+	      });
+
+	      this.shadow.shadow.clientVersion++;
+	    }
+	  } else {
+	    // The last delta postback from the server either hasn't happened
+	    // or was unsuccessful, so sync in raw mode to get in sync.
+	    this.shadow.shadow.text = this.shadow.doc;
+	    this.shadow.shadow.clientVersion++;
+
 	    editPacket.addEdit({
+	      mode: "r",
 	      clientVersion: this.shadow.shadow.clientVersion,
 	      serverVersion: this.shadow.shadow.serverVersion,
-	      patch: (this.useDeltaPatching) ?
-	        this.shadow.diffsToDelta(diffs) :
-	        this.shadow.diffsToTextPatches(diffs)
+	      doc: this.shadow.doc
 	    });
 
-	    this.shadow.shadow.clientVersion++;
+	    // Sending a raw dump will put us back in sync.
+	    // Set deltaOk to true in case this sync fails to connect, in which case
+	    // the following sync(s) should be a delta, not more raw dumps.
+	    this.deltaOk = true;
 	  }
 
 	  if (this.syncing) {
@@ -12524,7 +12554,6 @@
 	  }
 
 	  this.syncing = true;
-	  this.shadow.copyDocToShadow();
 
 	  return this.transport.send(editPacket);
 	};
@@ -12536,18 +12565,18 @@
 	 * @param {Object} [editPacket] Contains edits and version #'s from server
 	 */
 	DsEngineClient.prototype.receiveEdits = function receiveEdits(editPacket) {
-	  this.syncing = false;
-
 	  // Clear the local edit stack if the server ack's that they've
 	  // been processed
-	  if (editPacket.clientVersion === this.shadow.shadow.clientVersion) {
+	  if (editPacket.v === this.shadow.shadow.clientVersion) {
 	    this.clearEdits();
 	  }
 
 	  // Apply any new edits coming from the server
 	  if (editPacket.editStack && editPacket.editStack.length > 0) {
-	    this.shadow.applyEdits(editPacket.editStack);
+	    this.shadow.applyEdits(editPacket);
 	  }
+
+	  this.syncing = false;
 	};
 
 	/**
@@ -12588,8 +12617,6 @@
 	 * @param {String} options.docId The doc id identifying the document to sync
 	 * @param {Object} options.db The database adapter where the data resides
 	 * @param {Boolean} [options.useDeltaPatching=true] TRUE for delta, FALSE for text
-	 * @param {Number} [options.clientVersion=0] The starting client version number
-	 * @param {Number} [options.serverVersion=0] The starting server version number
 	 */
 	var DsEngineServer = function DsEngineServer(options) {
 	  if (!options) {
@@ -12600,39 +12627,13 @@
 	  }
 
 	  _.defaults(options, {
-	    clientVersion: 0,
-	    serverVersion: 0,
 	    useDeltaPatching: true
 	  });
 
 	  this.clientId = options.clientId;
 	  this.docId = options.docId;
 	  this.db = options.db(options.docId, options.clientId);
-	  this.clientVersion = options.clientVersion;
-	  this.serverVersion = options.serverVersion;
 	  this.useDeltaPatching = options.useDeltaPatching;
-	};
-
-	/**
-	 * Initialize this client/doc server by retrieving the data from the
-	 * db, or setting its default state if it does not yet exist.
-	 */
-	DsEngineServer.prototype.initialize = function initialize(cb) {
-	  var _this = this;
-
-	  _this.db.exists(function(err, exists) {
-	    if (err || exists) {
-	      return cb(err);
-	    }
-
-	    _this.db.set({
-	      shadow: {
-	        text: "",
-	        clientVersion: _this.clientVersion,
-	        serverVersion: _this.serverVersion
-	      }
-	    }, cb);
-	  });
 	};
 
 	/**
@@ -12671,7 +12672,7 @@
 
 	    // Clear the edit stack if the versions match
 	    function(shadow, done) {
-	      if (editPacket.serverVersion !== shadow.shadow.serverVersion) {
+	      if (editPacket.v !== shadow.shadow.serverVersion) {
 	        return done(null, shadow);
 	      }
 
@@ -12682,13 +12683,7 @@
 
 	    // Apply any edits in the edit stack coming from the client
 	    function(shadow, done) {
-	      if (!editPacket ||
-	          !editPacket.editStack ||
-	          editPacket.editStack.length < 1) {
-	        return done(null, shadow);
-	      }
-
-	      shadow.applyEdits(editPacket.editStack);
+	      shadow.applyEdits(editPacket);
 	      _this.db.set(shadow, done);
 	    }
 
@@ -12734,18 +12729,15 @@
 	    },
 
 	    function(shadow, editStack, done) {
-	      var diffs = shadow.calcDiff();
 	      var editPacket = new EditPacket({
-	        clientVersion: shadow.shadow.clientVersion,
-	        serverVersion: shadow.shadow.serverVersion,
+	        v: shadow.shadow.clientVersion,
 	        editStack: editStack
 	      });
 
-	      if (!diffs || diffs.length < 1) {
-	        return done("ok", editPacket);
-	      }
+	      var diffs = shadow.calcDiff();
 
 	      editPacket.addEdit({
+	        mode: "d",
 	        clientVersion: shadow.shadow.clientVersion,
 	        serverVersion: shadow.shadow.serverVersion,
 	        patch: (_this.useDeltaPatching) ?
@@ -12882,12 +12874,28 @@
 	 * @param {Array} editStack The editstack to patch on top of the shadow.
 	 * @returns {ClientShadow}
 	 */
-	ClientShadow.prototype.applyEdits = function applyEdits(editStack) {
+	ClientShadow.prototype.applyEdits = function applyEdits(editPacket) {
 	  var _this = this;
 
-	  editStack.map(function(edit) {
-	    if (edit.clientVersion === _this.shadow.clientVersion &&
-	      edit.serverVersion === _this.shadow.serverVersion) {
+	  editPacket.editStack.map(function(edit) {
+	    if (edit.clientVersion != _this.shadow.clientVersion) {
+	      // Can't apply a delta on a mismatched shadow version.
+	      //file.deltaOk = false;
+	      console.error("Client version number mismatch.\n" +
+	        "Expected: " + _this.shadow.clientVersion + " " +
+	        "Got: " + edit.clientVersion);
+	    } else if (edit.serverVersion > _this.shadow.serverVersion) {
+	      // Server has a version in the future?
+	      //file.deltaOk = false;
+	      console.error("Server version in future.\n" +
+	        "Expected: " + _this.shadow.serverVersion + " " +
+	        "Got: " + editPacket.v);
+	    } else if (edit.serverVersion < _this.shadow.serverVersion) {
+	      // We"ve already seen this diff.
+	      console.warn("Server version in past.\n" +
+	        "Expected: " + _this.shadow.serverVersion + " " +
+	        "Got: " + editPacket.v);
+	    } else {
 	      var diffs;
 	      var patches;
 
@@ -13008,7 +13016,7 @@
 	 */
 	ClientShadow.prototype.copyDocToShadow = function copyDocToShadow() {
 	  this.shadow.text = this.doc;
-	}
+	};
 
 	module.exports = ClientShadow;
 
@@ -13090,49 +13098,96 @@
 	 * @param {Array} editStack The editstack to patch on top of the shadow.
 	 * @returns {ServerShadow}
 	 */
-	ServerShadow.prototype.applyEdits = function applyEdits(editStack) {
+	ServerShadow.prototype.applyEdits = function applyEdits(editPacket) {
 	  var _this = this;
 
-	  editStack.map(function(edit) {
-	    if (edit.clientVersion === _this.shadow.clientVersion &&
-	      edit.serverVersion === _this.shadow.serverVersion) {
-	      var diffs;
-	      var patches;
+	  if (!editPacket ||
+	      !editPacket.editStack ||
+	      editPacket.editStack.length < 1) {
+	    return this;
+	  }
 
-	      if (_this.useDeltaPatching) {
-	        diffs = dmp.diff_fromDelta(_this.shadow.text, edit.patch);
-	        patches = dmp.patch_make(_this.shadow.text, diffs);
-	      } else {
-	        patches = dmp.patch_fromText(edit.patch);
-	      }
-
-	      if (!patches) {
-	        // TODO: Freak out
-	        return;
-	      }
-
-	      // First, update the shadow text for this client
-	      if (diffs) {
-	        // Use diffs if we have them
-	        _this.shadow.text = dmp.diff_text2(diffs);
-	      } else {
-	        // Otherwise we have to patch the shadow to current
-	        _this.shadow.text = dmp.patch_apply(patches, _this.shadow.text)[0];
-	      }
-
-	      // TODO: Take backup
-	      // _this.backup.text = _this.shadow.text
-	      // _this.backup.serverVersion = _this.shadow.serverVersion
-
-	      // Second, update the server text
-	      _this.patchDoc(patches);
-
-	      // When the server receives new edits, bump the client #
-	      _this.shadow.clientVersion++;
+	  editPacket.editStack.map(function(edit) {
+	    switch (edit.mode) {
+	      case "r":
+	        _this.applyRawEdit(edit);
+	        break;
+	      case "d":
+	        _this.applyDeltaEdit(edit);
+	        break;
 	    }
 	  });
 
 	  return this;
+	};
+
+	/**
+	 * Apply the supplied raw mode edit against the server shadow/doc.
+	 *
+	 * @param {Object} edit The edit to apply.
+	 */
+	ServerShadow.prototype.applyRawEdit = function applyRawEdit(edit) {
+	  this.shadow.text = edit.doc;
+	  this.shadow.clientVersion = edit.clientVersion;
+	  this.shadow.serverVersion = edit.serverVersion;
+	  // TODO: Take backup
+	};
+
+	/**
+	 * Apply the suppled delta mode edit against the server shadow/doc.
+	 *
+	 * @param {Object} edit The edit to apply.
+	 */
+	ServerShadow.prototype.applyDeltaEdit = function applyDeltaEdit(edit) {
+	  if (edit.serverVersion !== this.shadow.serverVersion) {
+	    // Can't apply a delta on a mismatched shadow version
+	    //delta_ok = false;
+	    console.warn("Shadow version mismatch: " + edit.serverVersion +
+	      " != " + this.shadow.serverVersion);
+	  } else if (edit.clientVersion > this.shadow.clientVersion) {
+	    // Client has a version in the future?
+	    //delta_ok = false;
+	    console.warn("Future delta: " + edit.clientVersion +
+	      " > " + this.shadow.clientVersion);
+	  } else if (edit.clientVersion < this.shadow.clientVersion) {
+	    // We've already seen this diff. Pass.
+	    console.warn("Repeated delta: " + edit.clientVersion +
+	      " < " + this.shadow.clientVersion);
+	  } else {
+	    var diffs;
+	    var patches;
+
+	    if (this.useDeltaPatching) {
+	      diffs = dmp.diff_fromDelta(this.shadow.text, edit.patch);
+	      patches = dmp.patch_make(this.shadow.text, diffs);
+	    } else {
+	      patches = dmp.patch_fromText(edit.patch);
+	    }
+
+	    // When the server receives new edits, bump the client #
+	    this.shadow.clientVersion++;
+
+	    if (!patches) {
+	      // TODO: Freak out
+	      return;
+	    }
+
+	    // First, update the shadow text for this client
+	    if (diffs) {
+	      // Use diffs if we have them
+	      this.shadow.text = dmp.diff_text2(diffs);
+	    } else {
+	      // Otherwise we have to patch the shadow to current
+	      this.shadow.text = dmp.patch_apply(patches, this.shadow.text)[0];
+	    }
+
+	    // TODO: Take backup
+	    // this.backup.text = this.shadow.text
+	    // this.backup.serverVersion = this.shadow.serverVersion
+
+	    // Second, update the server text
+	    this.patchDoc(patches);
+	  }
 	};
 
 	/**
@@ -13224,7 +13279,7 @@
 	 */
 	ServerShadow.prototype.copyDocToShadow = function copyDocToShadow() {
 	  this.shadow.text = this.doc;
-	}
+	};
 
 	module.exports = ServerShadow;
 
@@ -26566,116 +26621,20 @@
 
 	}());
 
-	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(13), __webpack_require__(14).setImmediate))
+	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(15), __webpack_require__(13).setImmediate))
 
 /***/ },
 /* 12 */
 /***/ function(module, exports, __webpack_require__) {
 
-	module.exports = __webpack_require__(15).diff_match_patch;
+	module.exports = __webpack_require__(14).diff_match_patch;
 
 
 /***/ },
 /* 13 */
 /***/ function(module, exports, __webpack_require__) {
 
-	// shim for using process in browser
-
-	var process = module.exports = {};
-	var queue = [];
-	var draining = false;
-	var currentQueue;
-	var queueIndex = -1;
-
-	function cleanUpNextTick() {
-	    draining = false;
-	    if (currentQueue.length) {
-	        queue = currentQueue.concat(queue);
-	    } else {
-	        queueIndex = -1;
-	    }
-	    if (queue.length) {
-	        drainQueue();
-	    }
-	}
-
-	function drainQueue() {
-	    if (draining) {
-	        return;
-	    }
-	    var timeout = setTimeout(cleanUpNextTick);
-	    draining = true;
-
-	    var len = queue.length;
-	    while(len) {
-	        currentQueue = queue;
-	        queue = [];
-	        while (++queueIndex < len) {
-	            currentQueue[queueIndex].run();
-	        }
-	        queueIndex = -1;
-	        len = queue.length;
-	    }
-	    currentQueue = null;
-	    draining = false;
-	    clearTimeout(timeout);
-	}
-
-	process.nextTick = function (fun) {
-	    var args = new Array(arguments.length - 1);
-	    if (arguments.length > 1) {
-	        for (var i = 1; i < arguments.length; i++) {
-	            args[i - 1] = arguments[i];
-	        }
-	    }
-	    queue.push(new Item(fun, args));
-	    if (!draining) {
-	        setTimeout(drainQueue, 0);
-	    }
-	};
-
-	// v8 likes predictible objects
-	function Item(fun, array) {
-	    this.fun = fun;
-	    this.array = array;
-	}
-	Item.prototype.run = function () {
-	    this.fun.apply(null, this.array);
-	};
-	process.title = 'browser';
-	process.browser = true;
-	process.env = {};
-	process.argv = [];
-	process.version = ''; // empty string to avoid regexp issues
-	process.versions = {};
-
-	function noop() {}
-
-	process.on = noop;
-	process.addListener = noop;
-	process.once = noop;
-	process.off = noop;
-	process.removeListener = noop;
-	process.removeAllListeners = noop;
-	process.emit = noop;
-
-	process.binding = function (name) {
-	    throw new Error('process.binding is not supported');
-	};
-
-	// TODO(shtylman)
-	process.cwd = function () { return '/' };
-	process.chdir = function (dir) {
-	    throw new Error('process.chdir is not supported');
-	};
-	process.umask = function() { return 0; };
-
-
-/***/ },
-/* 14 */
-/***/ function(module, exports, __webpack_require__) {
-
-	/* WEBPACK VAR INJECTION */(function(setImmediate, clearImmediate) {var nextTick = __webpack_require__(13).nextTick;
+	/* WEBPACK VAR INJECTION */(function(setImmediate, clearImmediate) {var nextTick = __webpack_require__(15).nextTick;
 	var apply = Function.prototype.apply;
 	var slice = Array.prototype.slice;
 	var immediateIds = {};
@@ -26751,10 +26710,10 @@
 	exports.clearImmediate = typeof clearImmediate === "function" ? clearImmediate : function(id) {
 	  delete immediateIds[id];
 	};
-	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(14).setImmediate, __webpack_require__(14).clearImmediate))
+	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(13).setImmediate, __webpack_require__(13).clearImmediate))
 
 /***/ },
-/* 15 */
+/* 14 */
 /***/ function(module, exports, __webpack_require__) {
 
 	/**
@@ -29031,6 +28990,102 @@
 	this['DIFF_DELETE'] = DIFF_DELETE;
 	this['DIFF_INSERT'] = DIFF_INSERT;
 	this['DIFF_EQUAL'] = DIFF_EQUAL;
+
+
+/***/ },
+/* 15 */
+/***/ function(module, exports, __webpack_require__) {
+
+	// shim for using process in browser
+
+	var process = module.exports = {};
+	var queue = [];
+	var draining = false;
+	var currentQueue;
+	var queueIndex = -1;
+
+	function cleanUpNextTick() {
+	    draining = false;
+	    if (currentQueue.length) {
+	        queue = currentQueue.concat(queue);
+	    } else {
+	        queueIndex = -1;
+	    }
+	    if (queue.length) {
+	        drainQueue();
+	    }
+	}
+
+	function drainQueue() {
+	    if (draining) {
+	        return;
+	    }
+	    var timeout = setTimeout(cleanUpNextTick);
+	    draining = true;
+
+	    var len = queue.length;
+	    while(len) {
+	        currentQueue = queue;
+	        queue = [];
+	        while (++queueIndex < len) {
+	            currentQueue[queueIndex].run();
+	        }
+	        queueIndex = -1;
+	        len = queue.length;
+	    }
+	    currentQueue = null;
+	    draining = false;
+	    clearTimeout(timeout);
+	}
+
+	process.nextTick = function (fun) {
+	    var args = new Array(arguments.length - 1);
+	    if (arguments.length > 1) {
+	        for (var i = 1; i < arguments.length; i++) {
+	            args[i - 1] = arguments[i];
+	        }
+	    }
+	    queue.push(new Item(fun, args));
+	    if (!draining) {
+	        setTimeout(drainQueue, 0);
+	    }
+	};
+
+	// v8 likes predictible objects
+	function Item(fun, array) {
+	    this.fun = fun;
+	    this.array = array;
+	}
+	Item.prototype.run = function () {
+	    this.fun.apply(null, this.array);
+	};
+	process.title = 'browser';
+	process.browser = true;
+	process.env = {};
+	process.argv = [];
+	process.version = ''; // empty string to avoid regexp issues
+	process.versions = {};
+
+	function noop() {}
+
+	process.on = noop;
+	process.addListener = noop;
+	process.once = noop;
+	process.off = noop;
+	process.removeListener = noop;
+	process.removeAllListeners = noop;
+	process.emit = noop;
+
+	process.binding = function (name) {
+	    throw new Error('process.binding is not supported');
+	};
+
+	// TODO(shtylman)
+	process.cwd = function () { return '/' };
+	process.chdir = function (dir) {
+	    throw new Error('process.chdir is not supported');
+	};
+	process.umask = function() { return 0; };
 
 
 /***/ }

@@ -26,19 +26,13 @@ app.post("/sync", function(req, res) {
     useDeltaPatching: USE_DELTA_PATCHING
   });
 
-  server.initialize(function(err) {
+  server.receiveEdits(editPacket, function(err, responsePkt) {
     if (err) {
       return res.status(500).send(err);
     }
 
-    server.receiveEdits(editPacket, function(err, responsePkt) {
-      if (err) {
-        return res.status(500).send(err);
-      }
-
-      res.json(responsePkt);
-    });
-  })
+    res.json(responsePkt);
+  });
 });
 
 app.listen(3000, function() {

@@ -28,8 +28,7 @@ Transport.prototype.send = function(editPacket) {
       docId: this.docId,
       clientId: this.clientId,
       editPacket: {
-        clientVersion: editPacket.clientVersion,
-        serverVersion: editPacket.serverVersion,
+        v: editPacket.v,
         editStack: editPacket.editStack
       }
     })
@@ -45,10 +44,7 @@ Transport.prototype.send = function(editPacket) {
 function DSClientController(docId, element, clientId) {
   var client = window[clientId] = new DseClient({
     transport: new Transport(docId, clientId),
-    clientVersion: 0,
-    serverVersion: 0,
     doc: "",
-    shadow: "",
     useDeltaPatching: USE_DELTA_PATCHING
   });
 
