@@ -44,8 +44,8 @@
 /* 0 */
 /***/ function(module, exports, __webpack_require__) {
 
-	var DseClient = __webpack_require__(2).Client;
-	var _ = __webpack_require__(3);
+	var DseClient = __webpack_require__(3).Client;
+	var _ = __webpack_require__(2);
 	var USE_DELTA_PATCHING = __webpack_require__(8).USE_DELTA_PATCHING;
 
 	/**
@@ -223,23 +223,6 @@
 
 /***/ },
 /* 2 */
-/***/ function(module, exports, __webpack_require__) {
-
-	/**
-	 *
-	 * To use this library:
-	 *
-	 * var DseClient = require("dsengine").Client;
-	 * var DseServer = require("dsengine").Server;
-	 */
-	module.exports = {
-	  Client: __webpack_require__(4),
-	  Server: __webpack_require__(5)
-	};
-
-
-/***/ },
-/* 3 */
 /***/ function(module, exports, __webpack_require__) {
 
 	var __WEBPACK_AMD_DEFINE_RESULT__;/* WEBPACK VAR INJECTION */(function(module, global) {/**
@@ -12448,6 +12431,23 @@
 	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(6)(module), (function() { return this; }())))
 
 /***/ },
+/* 3 */
+/***/ function(module, exports, __webpack_require__) {
+
+	/**
+	 *
+	 * To use this library:
+	 *
+	 * var DseClient = require("dsengine").Client;
+	 * var DseServer = require("dsengine").Server;
+	 */
+	module.exports = {
+	  Client: __webpack_require__(4),
+	  Server: __webpack_require__(5)
+	};
+
+
+/***/ },
 /* 4 */
 /***/ function(module, exports, __webpack_require__) {
 
@@ -12670,13 +12670,42 @@
 	      });
 	    },
 
-	    // Clear the edit stack if the versions match
+	    // Check the client's ack to see if they didn't receive
+	    // their last message and rollback if necessary
 	    function(shadow, done) {
-	      if (editPacket.v !== shadow.shadow.serverVersion) {
+	      if (editPacket.v !== shadow.shadow.serverVersion &&
+	          editPacket.v === shadow.shadow.backupServerVersion) {
+	        console.warn("Rollback from shadow " + shadow.shadow.serverVersion +
+	          " to backup shadow " + shadow.shadow.backupServerVersion);
+	        shadow.shadow.text = shadow.shadow.backupText;
+	        shadow.shadow.serverVersion = shadow.shadow.backupServerVersion;
+	        _this.db.saveEditStack([], function(err) {
+	          done(err, shadow);
+	        });
+	      } else {
+	        done(null, shadow);
+	      }
+	    },
+
+	    function(shadow, done) {
+	      _this.db.getEditStack(function(err, editStack) {
+	        done(err, shadow, editStack);
+	      });
+	    },
+
+	    // Remove anything from the edit stack that has been
+	    // ack'd by the client.
+	    function(shadow, editStack, done) {
+	      var reducedStack = _.reject(editStack, function(edit) {
+	        return edit.serverVersion <= editPacket.v;
+	      });
+
+	      if (reducedStack.length === editStack.length) {
+	        // Nothing to remove
 	        return done(null, shadow);
 	      }
 
-	      _this.db.saveEditStack([], function(err) {
+	      _this.db.saveEditStack(reducedStack, function(err) {
 	        done(err, shadow);
 	      });
 	    },
@@ -13043,7 +13072,9 @@
 	  shadow: {
 	    text: "",
 	    clientVersion : 0,
-	    serverVersion: 0
+	    serverVersion: 0,
+	    backupText: "",
+	    backupServerVersion: 0
 	  }
 	};
 
@@ -13086,7 +13117,9 @@
 	  this.shadow = {
 	    text: options.shadow.text,
 	    clientVersion: options.shadow.clientVersion,
-	    serverVersion: options.shadow.serverVersion
+	    serverVersion: options.shadow.serverVersion,
+	    backupText: options.shadow.backupText,
+	    backupServerVersion: options.shadow.backupServerVersion
 	  };
 
 	  return this;
@@ -13107,7 +13140,7 @@
 	    return this;
 	  }
 
-	  editPacket.editStack.map(function(edit) {
+	  editPacket.editStack.forEach(function(edit) {
 	    switch (edit.mode) {
 	      case "r":
 	        _this.applyRawEdit(edit);
@@ -13130,7 +13163,8 @@
 	  this.shadow.text = edit.doc;
 	  this.shadow.clientVersion = edit.clientVersion;
 	  this.shadow.serverVersion = edit.serverVersion;
-	  // TODO: Take backup
+	  this.shadow.backupText = this.shadow.text;
+	  this.shadow.backupServerVersion = this.shadow.serverVersion;
 	};
 
 	/**
@@ -13164,13 +13198,7 @@
 	      patches = dmp.patch_fromText(edit.patch);
 	    }
 
-	    // When the server receives new edits, bump the client #
 	    this.shadow.clientVersion++;
-
-	    if (!patches) {
-	      // TODO: Freak out
-	      return;
-	    }
 
 	    // First, update the shadow text for this client
 	    if (diffs) {
@@ -13180,10 +13208,8 @@
 	      // Otherwise we have to patch the shadow to current
 	      this.shadow.text = dmp.patch_apply(patches, this.shadow.text)[0];
 	    }
-
-	    // TODO: Take backup
-	    // this.backup.text = this.shadow.text
-	    // this.backup.serverVersion = this.shadow.serverVersion
+	    this.shadow.backupText = this.shadow.text;
+	    this.shadow.backupServerVersion = this.shadow.serverVersion;
 
 	    // Second, update the server text
 	    this.patchDoc(patches);
@@ -26621,99 +26647,17 @@
 
 	}());
 
-	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(15), __webpack_require__(13).setImmediate))
+	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(15), __webpack_require__(14).setImmediate))
 
 /***/ },
 /* 12 */
 /***/ function(module, exports, __webpack_require__) {
 
-	module.exports = __webpack_require__(14).diff_match_patch;
+	module.exports = __webpack_require__(13).diff_match_patch;
 
 
 /***/ },
 /* 13 */
-/***/ function(module, exports, __webpack_require__) {
-
-	/* WEBPACK VAR INJECTION */(function(setImmediate, clearImmediate) {var nextTick = __webpack_require__(15).nextTick;
-	var apply = Function.prototype.apply;
-	var slice = Array.prototype.slice;
-	var immediateIds = {};
-	var nextImmediateId = 0;
-
-	// DOM APIs, for completeness
-
-	exports.setTimeout = function() {
-	  return new Timeout(apply.call(setTimeout, window, arguments), clearTimeout);
-	};
-	exports.setInterval = function() {
-	  return new Timeout(apply.call(setInterval, window, arguments), clearInterval);
-	};
-	exports.clearTimeout =
-	exports.clearInterval = function(timeout) { timeout.close(); };
-
-	function Timeout(id, clearFn) {
-	  this._id = id;
-	  this._clearFn = clearFn;
-	}
-	Timeout.prototype.unref = Timeout.prototype.ref = function() {};
-	Timeout.prototype.close = function() {
-	  this._clearFn.call(window, this._id);
-	};
-
-	// Does not start the time, just sets up the members needed.
-	exports.enroll = function(item, msecs) {
-	  clearTimeout(item._idleTimeoutId);
-	  item._idleTimeout = msecs;
-	};
-
-	exports.unenroll = function(item) {
-	  clearTimeout(item._idleTimeoutId);
-	  item._idleTimeout = -1;
-	};
-
-	exports._unrefActive = exports.active = function(item) {
-	  clearTimeout(item._idleTimeoutId);
-
-	  var msecs = item._idleTimeout;
-	  if (msecs >= 0) {
-	    item._idleTimeoutId = setTimeout(function onTimeout() {
-	      if (item._onTimeout)
-	        item._onTimeout();
-	    }, msecs);
-	  }
-	};
-
-	// That's not how node.js implements it but the exposed api is the same.
-	exports.setImmediate = typeof setImmediate === "function" ? setImmediate : function(fn) {
-	  var id = nextImmediateId++;
-	  var args = arguments.length < 2 ? false : slice.call(arguments, 1);
-
-	  immediateIds[id] = true;
-
-	  nextTick(function onNextTick() {
-	    if (immediateIds[id]) {
-	      // fn.call() is faster so we optimize for the common use-case
-	      // @see http://jsperf.com/call-apply-segu
-	      if (args) {
-	        fn.apply(null, args);
-	      } else {
-	        fn.call(null);
-	      }
-	      // Prevent ids from leaking
-	      exports.clearImmediate(id);
-	    }
-	  });
-
-	  return id;
-	};
-
-	exports.clearImmediate = typeof clearImmediate === "function" ? clearImmediate : function(id) {
-	  delete immediateIds[id];
-	};
-	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(13).setImmediate, __webpack_require__(13).clearImmediate))
-
-/***/ },
-/* 14 */
 /***/ function(module, exports, __webpack_require__) {
 
 	/**
@@ -28991,6 +28935,88 @@
 	this['DIFF_INSERT'] = DIFF_INSERT;
 	this['DIFF_EQUAL'] = DIFF_EQUAL;
 
+
+/***/ },
+/* 14 */
+/***/ function(module, exports, __webpack_require__) {
+
+	/* WEBPACK VAR INJECTION */(function(setImmediate, clearImmediate) {var nextTick = __webpack_require__(15).nextTick;
+	var apply = Function.prototype.apply;
+	var slice = Array.prototype.slice;
+	var immediateIds = {};
+	var nextImmediateId = 0;
+
+	// DOM APIs, for completeness
+
+	exports.setTimeout = function() {
+	  return new Timeout(apply.call(setTimeout, window, arguments), clearTimeout);
+	};
+	exports.setInterval = function() {
+	  return new Timeout(apply.call(setInterval, window, arguments), clearInterval);
+	};
+	exports.clearTimeout =
+	exports.clearInterval = function(timeout) { timeout.close(); };
+
+	function Timeout(id, clearFn) {
+	  this._id = id;
+	  this._clearFn = clearFn;
+	}
+	Timeout.prototype.unref = Timeout.prototype.ref = function() {};
+	Timeout.prototype.close = function() {
+	  this._clearFn.call(window, this._id);
+	};
+
+	// Does not start the time, just sets up the members needed.
+	exports.enroll = function(item, msecs) {
+	  clearTimeout(item._idleTimeoutId);
+	  item._idleTimeout = msecs;
+	};
+
+	exports.unenroll = function(item) {
+	  clearTimeout(item._idleTimeoutId);
+	  item._idleTimeout = -1;
+	};
+
+	exports._unrefActive = exports.active = function(item) {
+	  clearTimeout(item._idleTimeoutId);
+
+	  var msecs = item._idleTimeout;
+	  if (msecs >= 0) {
+	    item._idleTimeoutId = setTimeout(function onTimeout() {
+	      if (item._onTimeout)
+	        item._onTimeout();
+	    }, msecs);
+	  }
+	};
+
+	// That's not how node.js implements it but the exposed api is the same.
+	exports.setImmediate = typeof setImmediate === "function" ? setImmediate : function(fn) {
+	  var id = nextImmediateId++;
+	  var args = arguments.length < 2 ? false : slice.call(arguments, 1);
+
+	  immediateIds[id] = true;
+
+	  nextTick(function onNextTick() {
+	    if (immediateIds[id]) {
+	      // fn.call() is faster so we optimize for the common use-case
+	      // @see http://jsperf.com/call-apply-segu
+	      if (args) {
+	        fn.apply(null, args);
+	      } else {
+	        fn.call(null);
+	      }
+	      // Prevent ids from leaking
+	      exports.clearImmediate(id);
+	    }
+	  });
+
+	  return id;
+	};
+
+	exports.clearImmediate = typeof clearImmediate === "function" ? clearImmediate : function(id) {
+	  delete immediateIds[id];
+	};
+	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(14).setImmediate, __webpack_require__(14).clearImmediate))
 
 /***/ },
 /* 15 */
