@@ -24,6 +24,7 @@ Transport.prototype.send = function(editPacket) {
     method: "POST",
     dataType: "json",
     contentType: "application/json",
+    timeout: 3000,
     data: JSON.stringify({
       docId: this.docId,
       clientId: this.clientId,
@@ -52,21 +53,51 @@ function DSClientController(docId, element, clientId) {
   this.$input = $("#" + element + "-textarea");
   this.$packetList = $("#" + element + "-packetList");
   this.client = client;
-  this.$button.on("click", this.startSync.bind(this));
-  this.startSync();
+  this.$button.on("click", this.sync.bind(this));
+  this.sync();
 }
+
+DSClientController.prototype.log = function(line, level) {
+  level = (level || "info");
+
+  if (level != "info") {
+    level = "alert-" + level;
+  }
+
+  var logLine =
+    "<li class='list-group-item " + level + "'>" + line + "</li>";
+
+  this.$packetList.prepend(logLine);
+};
+
+DSClientController.prototype.logCode = function(line) {
+  this.log("<pre>" + line + "</pre>");
+};
+
+DSClientController.prototype.logWarning = function(line) {
+  this.log(line, "warning");
+};
+
+DSClientController.prototype.logError = function(line) {
+  this.log(line, "error");
+};
 
 /**
  * Called to start sync process with server
  */
-DSClientController.prototype.startSync = function() {
+DSClientController.prototype.sync = function() {
   var _this = this;
   var promise = this.client.startSync(this.$input.val());
 
   if (promise) {
+    _this.log("Syncing client " + _this.client.transport.clientId + "...");
     promise.then(this.updateClient.bind(this))
-      .fail(function() {
+      .fail(function(xhr, textStatus) {
         _this.client.syncFailed();
+        if (textStatus === "timeout") {
+          console.warn("Timeout", xhr, textStatus);
+          _this.logWarning("Timeout");
+        }
       });
   }
 };
@@ -78,28 +109,24 @@ DSClientController.prototype.startSync = function() {
 DSClientController.prototype.updateClient = function(editPacket) {
   this.client.receiveEdits(editPacket);
 
-  this.$packetList.prepend(
-    "<li class='list-group-item'><pre>" +
-      JSON.stringify(editPacket, null, 4) +
-    "</pre></li>");
-
+  this.logCode(JSON.stringify(editPacket, null, 4));
   this.$input.val(this.client.shadow.doc);
 };
 
 $(document).ready(function() {
   var clientIds = [];
 
-  function getRandomInt(min, max) {
+  function getRandomIntInclusive(min, max) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
   }
 
   function getClientId() {
     var min = 1;
     var max = 10000;
-    var id = getRandomInt(min, max);
+    var id = getRandomIntInclusive(min, max);
 
     while (_.contains(clientIds, id)) {
-      id = getRandomInt(min, max);
+      id = getRandomIntInclusive(min, max);
     }
 
     clientIds.push(id);
@@ -107,6 +134,33 @@ $(document).ready(function() {
   }
 
   // initialize two clients, we are treating each page session like a new client
-  new DSClientController("d1", "client1", String(getClientId()));
-  new DSClientController("d1", "client2", String(getClientId()));
+  var client1 = new DSClientController("d1", "client1", String(getClientId()));
+  var client2 = new DSClientController("d1", "client2", String(getClientId()));
+
+  $("#updateSettings").click(function() {
+    [client1, client2].forEach(function(client) {
+      client.log("Updating packet loss settings...");
+    });
+
+    return $.ajax({
+      url: "/pktloss",
+      method: "PUT",
+      dataType: "json",
+      contentType: "application/json",
+      data: JSON.stringify({
+        clientToServerPktLoss: $("#clientToServerPktLoss").val(),
+        serverToClientPktLoss: $("#serverToClientPktLoss").val()
+      })
+    })
+      .done(function(data) {
+        [client1, client2].forEach(function(client) {
+          client.logCode(JSON.stringify(data));
+        });
+      })
+      .fail(function() {
+        [client1, client2].forEach(function(client) {
+          client.logError("Update failed");
+        });
+      });
+  });
 });
