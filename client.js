@@ -2,6 +2,15 @@ var DseClient = require("dsengine").Client;
 var _ = require("lodash");
 var USE_DELTA_PATCHING = require("./config.js").USE_DELTA_PATCHING;
 
+window.toggleRowDetails = function toggleRowDetails(el) {
+  var $buttonEl = $(el);
+  var $targetEl = $buttonEl.parent().next();
+  if (!$targetEl.collapse) {
+    $targetEl.collapse();
+  }
+  $targetEl.collapse("toggle");
+}
+
 /**
  * Transport for DSClientController's
  * @param docId document id
@@ -57,29 +66,42 @@ function DSClientController(docId, element, clientId) {
   this.sync();
 }
 
-DSClientController.prototype.log = function(line, level) {
-  level = (level || "info");
+DSClientController.prototype.log = function(options) {
+  options = (options || {});
+  options.title = (options.title || "Unknown operation");
+  options.level = (options.level || "info");
 
-  if (level != "info") {
-    level = "alert-" + level;
+  if (options.level != "info") {
+    options.level = "alert-" + options.level;
   }
 
-  var logLine =
-    "<li class='list-group-item " + level + "'>" + line + "</li>";
+  var logLine = "<li class='list-group-item " + options.level + "'>";
+  logLine += options.title;
+  if (options.detail) {
+    logLine += "<div class='pull-right'>";
+    logLine += "<button onclick='toggleRowDetails(this);'>Toggle Details</button>";
+    logLine += "</div>";
+    logLine += "<div class='collapse well'>" + options.detail + "</div>";
+  }
+  logLine += "</li></a>";
 
   this.$packetList.prepend(logLine);
 };
 
-DSClientController.prototype.logCode = function(line) {
-  this.log("<pre>" + line + "</pre>");
+DSClientController.prototype.logInfo = function(line) {
+  this.log({ level: "info", title: line });
 };
 
 DSClientController.prototype.logWarning = function(line) {
-  this.log(line, "warning");
+  this.log({ level: "warning", title: line });
 };
 
 DSClientController.prototype.logError = function(line) {
-  this.log(line, "error");
+  this.log({ level: "error", title: line });
+};
+
+DSClientController.prototype.logResponse = function(title, response) {
+  this.log({ level: "success", title: title, detail: response });
 };
 
 /**
@@ -90,7 +112,8 @@ DSClientController.prototype.sync = function() {
   var promise = this.client.startSync(this.$input.val());
 
   if (promise) {
-    _this.log("Syncing client " + _this.client.transport.clientId + "...");
+    _this.logInfo("Syncing client " + _this.client.transport.clientId + "...");
+
     promise.then(this.updateClient.bind(this))
       .fail(function(xhr, textStatus) {
         _this.client.syncFailed();
@@ -109,7 +132,7 @@ DSClientController.prototype.sync = function() {
 DSClientController.prototype.updateClient = function(editPacket) {
   this.client.receiveEdits(editPacket);
 
-  this.logCode(JSON.stringify(editPacket, null, 4));
+  this.logResponse("Sync response", JSON.stringify(editPacket, null, 4));
   this.$input.val(this.client.shadow.doc);
 };
 
@@ -134,12 +157,12 @@ $(document).ready(function() {
   }
 
   // initialize two clients, we are treating each page session like a new client
-  var client1 = new DSClientController("d1", "client1", String(getClientId()));
-  var client2 = new DSClientController("d1", "client2", String(getClientId()));
+  var client1 = window.client1 = new DSClientController("d1", "client1", String(getClientId()));
+  var client2 = window.client2 = new DSClientController("d1", "client2", String(getClientId()));
 
   $("#updateSettings").click(function() {
     [client1, client2].forEach(function(client) {
-      client.log("Updating packet loss settings...");
+      client.logInfo("Updating packet loss settings...");
     });
 
     return $.ajax({
@@ -154,7 +177,7 @@ $(document).ready(function() {
     })
       .done(function(data) {
         [client1, client2].forEach(function(client) {
-          client.logCode(JSON.stringify(data));
+          client.logResponse("Update settings response", JSON.stringify(data));
         });
       })
       .fail(function() {
