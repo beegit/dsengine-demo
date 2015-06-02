@@ -120,23 +120,29 @@
 	 * @constructor
 	 */
 	function DSClientController(docId, element, clientId) {
-	  var client = window[clientId] = new DseClient({
-	    transport: new Transport(docId, clientId),
-	    doc: "",
-	    useDeltaPatching: USE_DELTA_PATCHING
-	  });
+	  var _this = this;
 
 	  this.$form = $("#" + element + "-form");
 	  this.$input = $("#" + element + "-textarea");
 	  this.log = LogFactory($("#" + element + "-packetList"));
-	  this.client = client;
 	  this.$form.on("submit", this.sync.bind(this));
 	  this.$input.on("keydown", this.submitFromInput.bind(this));
+	  this.client = new DseClient({
+	    transport: new Transport(docId, clientId),
+	    doc: "",
+	    useDeltaPatching: USE_DELTA_PATCHING,
+	    getDocText: function() {
+	      return _this.$input.val();
+	    },
+	    setDocText: function(text) {
+	      _this.$input.val(text);
+	    }
+	  });
+
 	  this.sync();
 	}
 
 	DSClientController.prototype.submitFromInput = function(e) {
-
 	  // submit form if ctrl + enter is pressed
 	  if ((e.keyCode == 10 || e.keyCode == 13) && e.ctrlKey) {
 	    this.sync();
@@ -163,11 +169,11 @@
 	 * Called to start sync process with server
 	 */
 	DSClientController.prototype.sync = function(e) {
-	  if(e) {
+	  if (e) {
 	    e.preventDefault();
 	  }
 	  var _this = this;
-	  var promise = this.client.startSync(this.$input.val());
+	  var promise = this.client.startSync();
 
 	  if (promise) {
 	    this.logInfo("Syncing client " + this.client.transport.clientId + "...");
@@ -189,9 +195,7 @@
 	 */
 	DSClientController.prototype.updateClient = function(editPacket) {
 	  this.client.receiveEdits(editPacket);
-
 	  this.logResponse("Sync response", JSON.stringify(editPacket, null, 4));
-	  this.$input.val(this.client.shadow.doc);
 	};
 
 	$(document).ready(function() {
@@ -12577,7 +12581,9 @@
 	  this.useDeltaPatching = options.useDeltaPatching;
 	  this.shadow = new ClientShadow({
 	    useDeltaPatching: options.useDeltaPatching,
-	    doc: options.doc
+	    doc: options.doc,
+	    getDocText: options.getDocText,
+	    setDocText: options.setDocText
 	  });
 	};
 
@@ -12589,7 +12595,7 @@
 	 */
 	DsEngineClient.prototype.startSync = function startSync(newDoc) {
 	  if (_.isString(newDoc)) {
-	    this.shadow.doc = newDoc;
+	    this.shadow.setDocText(newDoc);
 	  }
 
 	  var editPacket = new EditPacket({
@@ -12623,14 +12629,14 @@
 	  } else {
 	    // The last delta postback from the server either hasn't happened
 	    // or was unsuccessful, so sync in raw mode to get in sync.
-	    this.shadow.shadow.text = this.shadow.doc;
+	    this.shadow.shadow.text = this.shadow.getDocText();
 	    this.shadow.shadow.clientVersion++;
 
 	    editPacket.addEdit({
 	      mode: "r",
 	      clientVersion: this.shadow.shadow.clientVersion,
 	      serverVersion: this.shadow.shadow.serverVersion,
-	      doc: this.shadow.doc
+	      doc: this.shadow.getDocText()
 	    });
 
 	    // Sending a raw dump will put us back in sync.
@@ -12699,6 +12705,7 @@
 	 * @param {String} options.clientId ClientId to store the server shadow per-client
 	 * @param {String} options.docId The doc id identifying the document to sync
 	 * @param {Object} options.db The database adapter where the data resides
+	 * @param {String} [options.initDoc] Document contents to init to if `db.get` has no doc
 	 * @param {Boolean} [options.useDeltaPatching=true] TRUE for delta, FALSE for text
 	 */
 	var DsEngineServer = function DsEngineServer(options) {
@@ -12716,6 +12723,7 @@
 	  this.clientId = options.clientId;
 	  this.docId = options.docId;
 	  this.db = options.db(options.docId, options.clientId);
+	  this.initDoc = options.initDoc;
 	  this.useDeltaPatching = options.useDeltaPatching;
 	};
 
@@ -12745,6 +12753,12 @@
 	      _this.db.get(function(err, shadow) {
 	        if (err) {
 	          return done(err);
+	        }
+
+	        if (_.isUndefined(shadow.doc) || _.isNull(shadow.doc)) {
+	          if (_this.initDoc) {
+	            shadow.doc = _this.initDoc;
+	          }
 	        }
 
 	        done(null, new ServerShadow(_.extend(shadow, {
@@ -12835,7 +12849,9 @@
 	    },
 
 	    function(shadow, done) {
-	      console.log("Send edits: deltaOk=" + shadow.shadow.deltaOk);
+	      if (!shadow.shadow.deltaOk) {
+	        console.log("Send edits: deltaOk=" + shadow.shadow.deltaOk);
+	      }
 
 	      _this.db.getEditStack(function(err, editStack) {
 	        done(err, shadow, editStack);
@@ -12861,7 +12877,6 @@
 	        });
 
 	        shadow.shadow.serverVersion++;
-	        console.log("Sent delta");
 	      } else {
 	        shadow.shadow.deltaOk = true;
 	        shadow.shadow.clientVersion++;
@@ -12871,7 +12886,6 @@
 	          serverVersion: shadow.shadow.serverVersion,
 	          doc: shadow.doc
 	        });
-	        console.log("Sent raw");
 	      }
 
 	      shadow.copyDocToShadow();
@@ -12885,27 +12899,27 @@
 	          return done(err);
 	        }
 
-	        done(null, editPacket);
+	        done(null, editPacket, shadow);
 	      });
 	    },
 
-	    function(editPacket, done) {
+	    function(editPacket, shadow, done) {
 	      _this.db.saveEditStack(editPacket.editStack, function(err) {
 	        if (err) {
 	          return done(err);
 	        }
-	        done(null, editPacket);
+	        done(null, editPacket, shadow);
 	      });
 	    }
 
 	  ],
 
-	    function(err, editPacket) {
+	    function(err, editPacket, shadow) {
 	      if (err && err !== "ok") {
 	        return cb(err, false);
 	      }
 
-	      cb(null, editPacket);
+	      cb(null, editPacket, shadow.doc);
 	    }
 
 	  );
@@ -12988,16 +13002,31 @@
 	  _.defaults(options.shadow, defaults.shadow);
 
 	  this.useDeltaPatching = options.useDeltaPatching;
-	  this.doc = options.doc;
 	  this.editStack = options.editStack;
 	  this.shadow = {
 	    text: options.shadow.text,
 	    clientVersion: options.shadow.clientVersion,
 	    serverVersion: options.shadow.serverVersion
 	  };
+	  if (!_.isUndefined(options.getDocText)) {
+	    this.getDocText = options.getDocText;
+	  }
+	  if (!_.isUndefined(options.setDocText)) {
+	    this.setDocText = options.setDocText;
+	  } else {
+	    this.setDocText(options.doc);
+	  }
 
 	  return this;
 	};
+
+	ClientShadow.prototype.getDocText = function getDocText() {
+	  return this.doc;
+	}
+
+	ClientShadow.prototype.setDocText = function getDocText(docText) {
+	  this.doc = docText;
+	}
 
 	/**
 	 * Apply the supplied editstack as patches on top of the shadow text.
@@ -13020,7 +13049,7 @@
 	};
 
 	ClientShadow.prototype.applyRawEdit = function applyRawEdit(edit) {
-	  this.doc = edit.doc;
+	  this.setDocText(edit.doc);
 	  this.shadow.text = edit.doc;
 	  this.shadow.clientVersion = edit.clientVersion;
 	  this.shadow.serverVersion = edit.serverVersion;
@@ -13077,13 +13106,13 @@
 	 * @param {[Patch]} patches The patches to apply.
 	 */
 	ClientShadow.prototype.patchDoc = function patchDoc(patches) {
-	  var tmpDoc = this.doc;
+	  var tmpDoc = this.getDocText();
 	  var result = dmp.patch_apply(patches, tmpDoc);
 	  // Set the new text only if there is a change to be made.
 	  if (tmpDoc != result[0]) {
 	    // The following will probably destroy any cursor or selection.
 	    // Widgets with cursors should override and patch more delicately.
-	    this.doc = result[0];
+	    this.setDocText(result[0]);
 	    // TODO: Fire an onDocChanged event
 	  }
 	};
@@ -13094,7 +13123,7 @@
 	 * @returns {[Diff]} Array of diffs.
 	 */
 	ClientShadow.prototype.calcDiff = function calcDiff() {
-	  var diffs = dmp.diff_main(this.shadow.text, this.doc, true);
+	  var diffs = dmp.diff_main(this.shadow.text, this.getDocText(), true);
 
 	  if (diffs.length > 2) {
 	    dmp.diff_cleanupSemantic(diffs);
@@ -13160,7 +13189,7 @@
 	 * Copy the document text into the shadow text.
 	 */
 	ClientShadow.prototype.copyDocToShadow = function copyDocToShadow() {
-	  this.shadow.text = this.doc;
+	  this.shadow.text = this.getDocText();
 	};
 
 	module.exports = ClientShadow;

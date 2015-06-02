@@ -74,23 +74,29 @@ Transport.prototype.send = function(editPacket) {
  * @constructor
  */
 function DSClientController(docId, element, clientId) {
-  var client = window[clientId] = new DseClient({
-    transport: new Transport(docId, clientId),
-    doc: "",
-    useDeltaPatching: USE_DELTA_PATCHING
-  });
+  var _this = this;
 
   this.$form = $("#" + element + "-form");
   this.$input = $("#" + element + "-textarea");
   this.log = LogFactory($("#" + element + "-packetList"));
-  this.client = client;
   this.$form.on("submit", this.sync.bind(this));
   this.$input.on("keydown", this.submitFromInput.bind(this));
+  this.client = new DseClient({
+    transport: new Transport(docId, clientId),
+    doc: "",
+    useDeltaPatching: USE_DELTA_PATCHING,
+    getDocText: function() {
+      return _this.$input.val();
+    },
+    setDocText: function(text) {
+      _this.$input.val(text);
+    }
+  });
+
   this.sync();
 }
 
 DSClientController.prototype.submitFromInput = function(e) {
-
   // submit form if ctrl + enter is pressed
   if ((e.keyCode == 10 || e.keyCode == 13) && e.ctrlKey) {
     this.sync();
@@ -117,11 +123,11 @@ DSClientController.prototype.logResponse = function(title, response) {
  * Called to start sync process with server
  */
 DSClientController.prototype.sync = function(e) {
-  if(e) {
+  if (e) {
     e.preventDefault();
   }
   var _this = this;
-  var promise = this.client.startSync(this.$input.val());
+  var promise = this.client.startSync();
 
   if (promise) {
     this.logInfo("Syncing client " + this.client.transport.clientId + "...");
@@ -143,9 +149,7 @@ DSClientController.prototype.sync = function(e) {
  */
 DSClientController.prototype.updateClient = function(editPacket) {
   this.client.receiveEdits(editPacket);
-
   this.logResponse("Sync response", JSON.stringify(editPacket, null, 4));
-  this.$input.val(this.client.shadow.doc);
 };
 
 $(document).ready(function() {
