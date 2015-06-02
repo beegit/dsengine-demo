@@ -80,13 +80,22 @@ function DSClientController(docId, element, clientId) {
     useDeltaPatching: USE_DELTA_PATCHING
   });
 
-  this.$button = $("#" + element + "-button");
+  this.$form = $("#" + element + "-form");
   this.$input = $("#" + element + "-textarea");
   this.log = LogFactory($("#" + element + "-packetList"));
   this.client = client;
-  this.$button.on("click", this.sync.bind(this));
+  this.$form.on("submit", this.sync.bind(this));
+  this.$input.on("keydown", this.submitFromInput.bind(this));
   this.sync();
 }
+
+DSClientController.prototype.submitFromInput = function(e) {
+
+  // submit form if ctrl + enter is pressed
+  if ((e.keyCode == 10 || e.keyCode == 13) && e.ctrlKey) {
+    this.sync();
+  }
+};
 
 DSClientController.prototype.logInfo = function(line) {
   this.log({ level: "info", title: line });
@@ -107,12 +116,15 @@ DSClientController.prototype.logResponse = function(title, response) {
 /**
  * Called to start sync process with server
  */
-DSClientController.prototype.sync = function() {
+DSClientController.prototype.sync = function(e) {
+  if(e) {
+    e.preventDefault();
+  }
   var _this = this;
   var promise = this.client.startSync(this.$input.val());
 
   if (promise) {
-    _this.logInfo("Syncing client " + _this.client.transport.clientId + "...");
+    this.logInfo("Syncing client " + this.client.transport.clientId + "...");
 
     promise.then(this.updateClient.bind(this))
       .fail(function(xhr, textStatus) {
@@ -157,11 +169,16 @@ $(document).ready(function() {
   }
 
   // initialize two clients, we are treating each page session like a new client
-  var client1 = window.client1 = new DSClientController("d1", "client1", String(getClientId()));
-  var client2 = window.client2 = new DSClientController("d1", "client2", String(getClientId()));
+  var clients = [
+    new DSClientController("d1", "client1", String(getClientId())),
+    new DSClientController("d1", "client2", String(getClientId()))
+  ];
+  clients.forEach(function(client, index) {
+    window["client" + (index + 1)] = client;
+  });
 
   $("#updateSettings").click(function() {
-    [client1, client2].forEach(function(client) {
+    clients.forEach(function(client) {
       client.logInfo("Updating packet loss settings...");
     });
 
@@ -176,12 +193,12 @@ $(document).ready(function() {
       })
     })
       .done(function(data) {
-        [client1, client2].forEach(function(client) {
+        clients.forEach(function(client) {
           client.logResponse("Update settings response", JSON.stringify(data));
         });
       })
       .fail(function() {
-        [client1, client2].forEach(function(client) {
+        clients.forEach(function(client) {
           client.logError("Update failed");
         });
       });

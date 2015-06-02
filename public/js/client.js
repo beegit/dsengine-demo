@@ -126,13 +126,22 @@
 	    useDeltaPatching: USE_DELTA_PATCHING
 	  });
 
-	  this.$button = $("#" + element + "-button");
+	  this.$form = $("#" + element + "-form");
 	  this.$input = $("#" + element + "-textarea");
 	  this.log = LogFactory($("#" + element + "-packetList"));
 	  this.client = client;
-	  this.$button.on("click", this.sync.bind(this));
+	  this.$form.on("submit", this.sync.bind(this));
+	  this.$input.on("keydown", this.submitFromInput.bind(this));
 	  this.sync();
 	}
+
+	DSClientController.prototype.submitFromInput = function(e) {
+
+	  // submit form if ctrl + enter is pressed
+	  if ((e.keyCode == 10 || e.keyCode == 13) && e.ctrlKey) {
+	    this.sync();
+	  }
+	};
 
 	DSClientController.prototype.logInfo = function(line) {
 	  this.log({ level: "info", title: line });
@@ -153,12 +162,15 @@
 	/**
 	 * Called to start sync process with server
 	 */
-	DSClientController.prototype.sync = function() {
+	DSClientController.prototype.sync = function(e) {
+	  if(e) {
+	    e.preventDefault();
+	  }
 	  var _this = this;
 	  var promise = this.client.startSync(this.$input.val());
 
 	  if (promise) {
-	    _this.logInfo("Syncing client " + _this.client.transport.clientId + "...");
+	    this.logInfo("Syncing client " + this.client.transport.clientId + "...");
 
 	    promise.then(this.updateClient.bind(this))
 	      .fail(function(xhr, textStatus) {
@@ -203,11 +215,16 @@
 	  }
 
 	  // initialize two clients, we are treating each page session like a new client
-	  var client1 = window.client1 = new DSClientController("d1", "client1", String(getClientId()));
-	  var client2 = window.client2 = new DSClientController("d1", "client2", String(getClientId()));
+	  var clients = [
+	    new DSClientController("d1", "client1", String(getClientId())),
+	    new DSClientController("d1", "client2", String(getClientId()))
+	  ];
+	  clients.forEach(function(client, index) {
+	    window["client" + (index + 1)] = client;
+	  });
 
 	  $("#updateSettings").click(function() {
-	    [client1, client2].forEach(function(client) {
+	    clients.forEach(function(client) {
 	      client.logInfo("Updating packet loss settings...");
 	    });
 
@@ -222,12 +239,12 @@
 	      })
 	    })
 	      .done(function(data) {
-	        [client1, client2].forEach(function(client) {
+	        clients.forEach(function(client) {
 	          client.logResponse("Update settings response", JSON.stringify(data));
 	        });
 	      })
 	      .fail(function() {
-	        [client1, client2].forEach(function(client) {
+	        clients.forEach(function(client) {
 	          client.logError("Update failed");
 	        });
 	      });
@@ -26752,17 +26769,113 @@
 
 	}());
 
-	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(15), __webpack_require__(14).setImmediate))
+	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(13), __webpack_require__(15).setImmediate))
 
 /***/ },
 /* 12 */
 /***/ function(module, exports, __webpack_require__) {
 
-	module.exports = __webpack_require__(13).diff_match_patch;
+	module.exports = __webpack_require__(14).diff_match_patch;
 
 
 /***/ },
 /* 13 */
+/***/ function(module, exports, __webpack_require__) {
+
+	// shim for using process in browser
+
+	var process = module.exports = {};
+	var queue = [];
+	var draining = false;
+	var currentQueue;
+	var queueIndex = -1;
+
+	function cleanUpNextTick() {
+	    draining = false;
+	    if (currentQueue.length) {
+	        queue = currentQueue.concat(queue);
+	    } else {
+	        queueIndex = -1;
+	    }
+	    if (queue.length) {
+	        drainQueue();
+	    }
+	}
+
+	function drainQueue() {
+	    if (draining) {
+	        return;
+	    }
+	    var timeout = setTimeout(cleanUpNextTick);
+	    draining = true;
+
+	    var len = queue.length;
+	    while(len) {
+	        currentQueue = queue;
+	        queue = [];
+	        while (++queueIndex < len) {
+	            currentQueue[queueIndex].run();
+	        }
+	        queueIndex = -1;
+	        len = queue.length;
+	    }
+	    currentQueue = null;
+	    draining = false;
+	    clearTimeout(timeout);
+	}
+
+	process.nextTick = function (fun) {
+	    var args = new Array(arguments.length - 1);
+	    if (arguments.length > 1) {
+	        for (var i = 1; i < arguments.length; i++) {
+	            args[i - 1] = arguments[i];
+	        }
+	    }
+	    queue.push(new Item(fun, args));
+	    if (!draining) {
+	        setTimeout(drainQueue, 0);
+	    }
+	};
+
+	// v8 likes predictible objects
+	function Item(fun, array) {
+	    this.fun = fun;
+	    this.array = array;
+	}
+	Item.prototype.run = function () {
+	    this.fun.apply(null, this.array);
+	};
+	process.title = 'browser';
+	process.browser = true;
+	process.env = {};
+	process.argv = [];
+	process.version = ''; // empty string to avoid regexp issues
+	process.versions = {};
+
+	function noop() {}
+
+	process.on = noop;
+	process.addListener = noop;
+	process.once = noop;
+	process.off = noop;
+	process.removeListener = noop;
+	process.removeAllListeners = noop;
+	process.emit = noop;
+
+	process.binding = function (name) {
+	    throw new Error('process.binding is not supported');
+	};
+
+	// TODO(shtylman)
+	process.cwd = function () { return '/' };
+	process.chdir = function (dir) {
+	    throw new Error('process.chdir is not supported');
+	};
+	process.umask = function() { return 0; };
+
+
+/***/ },
+/* 14 */
 /***/ function(module, exports, __webpack_require__) {
 
 	/**
@@ -29042,10 +29155,10 @@
 
 
 /***/ },
-/* 14 */
+/* 15 */
 /***/ function(module, exports, __webpack_require__) {
 
-	/* WEBPACK VAR INJECTION */(function(setImmediate, clearImmediate) {var nextTick = __webpack_require__(15).nextTick;
+	/* WEBPACK VAR INJECTION */(function(setImmediate, clearImmediate) {var nextTick = __webpack_require__(13).nextTick;
 	var apply = Function.prototype.apply;
 	var slice = Array.prototype.slice;
 	var immediateIds = {};
@@ -29121,103 +29234,7 @@
 	exports.clearImmediate = typeof clearImmediate === "function" ? clearImmediate : function(id) {
 	  delete immediateIds[id];
 	};
-	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(14).setImmediate, __webpack_require__(14).clearImmediate))
-
-/***/ },
-/* 15 */
-/***/ function(module, exports, __webpack_require__) {
-
-	// shim for using process in browser
-
-	var process = module.exports = {};
-	var queue = [];
-	var draining = false;
-	var currentQueue;
-	var queueIndex = -1;
-
-	function cleanUpNextTick() {
-	    draining = false;
-	    if (currentQueue.length) {
-	        queue = currentQueue.concat(queue);
-	    } else {
-	        queueIndex = -1;
-	    }
-	    if (queue.length) {
-	        drainQueue();
-	    }
-	}
-
-	function drainQueue() {
-	    if (draining) {
-	        return;
-	    }
-	    var timeout = setTimeout(cleanUpNextTick);
-	    draining = true;
-
-	    var len = queue.length;
-	    while(len) {
-	        currentQueue = queue;
-	        queue = [];
-	        while (++queueIndex < len) {
-	            currentQueue[queueIndex].run();
-	        }
-	        queueIndex = -1;
-	        len = queue.length;
-	    }
-	    currentQueue = null;
-	    draining = false;
-	    clearTimeout(timeout);
-	}
-
-	process.nextTick = function (fun) {
-	    var args = new Array(arguments.length - 1);
-	    if (arguments.length > 1) {
-	        for (var i = 1; i < arguments.length; i++) {
-	            args[i - 1] = arguments[i];
-	        }
-	    }
-	    queue.push(new Item(fun, args));
-	    if (!draining) {
-	        setTimeout(drainQueue, 0);
-	    }
-	};
-
-	// v8 likes predictible objects
-	function Item(fun, array) {
-	    this.fun = fun;
-	    this.array = array;
-	}
-	Item.prototype.run = function () {
-	    this.fun.apply(null, this.array);
-	};
-	process.title = 'browser';
-	process.browser = true;
-	process.env = {};
-	process.argv = [];
-	process.version = ''; // empty string to avoid regexp issues
-	process.versions = {};
-
-	function noop() {}
-
-	process.on = noop;
-	process.addListener = noop;
-	process.once = noop;
-	process.off = noop;
-	process.removeListener = noop;
-	process.removeAllListeners = noop;
-	process.emit = noop;
-
-	process.binding = function (name) {
-	    throw new Error('process.binding is not supported');
-	};
-
-	// TODO(shtylman)
-	process.cwd = function () { return '/' };
-	process.chdir = function (dir) {
-	    throw new Error('process.chdir is not supported');
-	};
-	process.umask = function() { return 0; };
-
+	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(15).setImmediate, __webpack_require__(15).clearImmediate))
 
 /***/ }
 /******/ ]);
