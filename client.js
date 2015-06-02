@@ -2,14 +2,36 @@ var DseClient = require("dsengine").Client;
 var _ = require("lodash");
 var USE_DELTA_PATCHING = require("./config.js").USE_DELTA_PATCHING;
 
-window.toggleRowDetails = function toggleRowDetails(el) {
-  var $buttonEl = $(el);
-  var $targetEl = $buttonEl.parent().next();
-  if (!$targetEl.collapse) {
-    $targetEl.collapse();
+function LogFactory($el) {
+  return function(options) {
+    options = (options || {});
+    options.title = (options.title || "Unknown operation");
+    options.level = (options.level || "info");
+
+    if (options.level != "info") {
+      options.level = "alert-" + options.level;
+    }
+
+    var logLine = "<li class='list-group-item " + options.level + "'>";
+    if(options.detail) {
+      logLine += "<button class='toggle pull-right'>Toggle Details</button>";
+    }
+
+    logLine += "<h5>" + options.title + "</h5>";
+
+    if (options.detail) {
+      logLine += "<pre class='collapse well'>" + options.detail + "</pre>";
+    }
+    logLine += "</li>";
+
+    var $log = $(logLine);
+    $log.on("click", ".toggle", function(e) {
+      $(e.target).siblings(".collapse").toggleClass("in");
+    });
+    $el.prepend($log);
   }
-  $targetEl.collapse("toggle");
 }
+
 
 /**
  * Transport for DSClientController's
@@ -60,33 +82,11 @@ function DSClientController(docId, element, clientId) {
 
   this.$button = $("#" + element + "-button");
   this.$input = $("#" + element + "-textarea");
-  this.$packetList = $("#" + element + "-packetList");
+  this.log = LogFactory($("#" + element + "-packetList"));
   this.client = client;
   this.$button.on("click", this.sync.bind(this));
   this.sync();
 }
-
-DSClientController.prototype.log = function(options) {
-  options = (options || {});
-  options.title = (options.title || "Unknown operation");
-  options.level = (options.level || "info");
-
-  if (options.level != "info") {
-    options.level = "alert-" + options.level;
-  }
-
-  var logLine = "<li class='list-group-item " + options.level + "'>";
-  logLine += options.title;
-  if (options.detail) {
-    logLine += "<div class='pull-right'>";
-    logLine += "<button onclick='toggleRowDetails(this);'>Toggle Details</button>";
-    logLine += "</div>";
-    logLine += "<div class='collapse well'>" + options.detail + "</div>";
-  }
-  logLine += "</li></a>";
-
-  this.$packetList.prepend(logLine);
-};
 
 DSClientController.prototype.logInfo = function(line) {
   this.log({ level: "info", title: line });
