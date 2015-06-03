@@ -12562,14 +12562,15 @@
 	 * @param options The options hash
 	 * @param {String} options.doc The document to sync.
 	 * @param {Object} options.transport The transport instance to send with.
+	 * @param {String} [options.doc] The document to sync.
 	 * @param {Boolean} [options.useDeltaPatching=true] TRUE for delta, FALSE for text
 	 */
 	var DsEngineClient = function DsEngineClient(options) {
 	  if (!options) {
 	    throw new Error("Options are required to initialize dsengine.");
 	  }
-	  if (!_.isString(options.doc)) {
-	    throw new Error("Doc is required to initialize dsengine.");
+	  if (!options.transport) {
+	    throw new Error("A transport is required to initialize dsengine.");
 	  }
 
 	  _.defaults(options, {
@@ -12590,12 +12591,17 @@
 	/**
 	 * Synchronize any changes in the document with the server.
 	 *
-	 * @param {String} [newDoc] New doc to apply to `doc`
+	 * @param {String|Object} [options] If string, set to `doc`. If object, passthrough data.
 	 * before diffing & syncing.
 	 */
-	DsEngineClient.prototype.startSync = function startSync(newDoc) {
-	  if (_.isString(newDoc)) {
-	    this.shadow.setDocText(newDoc);
+	DsEngineClient.prototype.startSync = function startSync(options) {
+	  var passthrough;
+
+	  if (_.isString(options)) {
+	    this.shadow.setDocText(options);
+	  }
+	  if (_.isObject(options)) {
+	    passthrough = options;
 	  }
 
 	  var editPacket = new EditPacket({
@@ -12651,7 +12657,7 @@
 
 	  this.syncing = true;
 
-	  return this.transport.send(editPacket);
+	  return this.transport.send(editPacket, passthrough);
 	};
 
 	/**
@@ -12705,7 +12711,7 @@
 	 * @param {String} options.clientId ClientId to store the server shadow per-client
 	 * @param {String} options.docId The doc id identifying the document to sync
 	 * @param {Object} options.db The database adapter where the data resides
-	 * @param {String} [options.initDoc] Document contents to init to if `db.get` has no doc
+	 * @param {Function} [options.docInit] Function initialize `doc` if it isn't cached
 	 * @param {Boolean} [options.useDeltaPatching=true] TRUE for delta, FALSE for text
 	 */
 	var DsEngineServer = function DsEngineServer(options) {
@@ -12723,7 +12729,7 @@
 	  this.clientId = options.clientId;
 	  this.docId = options.docId;
 	  this.db = options.db(options.docId, options.clientId);
-	  this.initDoc = options.initDoc;
+	  this.docInit = options.docInit;
 	  this.useDeltaPatching = options.useDeltaPatching;
 	};
 
@@ -12755,15 +12761,54 @@
 	          return done(err);
 	        }
 
-	        if (_.isUndefined(shadow.doc) || _.isNull(shadow.doc)) {
-	          if (_this.initDoc) {
-	            shadow.doc = _this.initDoc;
-	          }
-	        }
+	        async.waterfall([
 
-	        done(null, new ServerShadow(_.extend(shadow, {
-	          useDeltaPatching: _this.useDeltaPatching
-	        })));
+	            // First case is if the doc is cached in the dsengine
+	            // db. If it is, use it.
+	            function(done2) {
+	              if (_.isUndefined(shadow.doc) ||  _.isNull(shadow.doc)) {
+	                return done2(null);
+	              }
+
+	              done2("ok", shadow);
+	            },
+
+	            // If the doc isn't cached in dsengine, use the injected
+	            // docInit function to ask how to get it.
+	            function(done2) {
+	              if (!_.isFunction(_this.docInit)) {
+	                return done2("ok", shadow);
+	              }
+
+	              _this.docInit(function(err, doc) {
+	                if (err) {
+	                  return done(err);
+	                }
+	                if (_.isNull(doc) || doc === false) {
+	                  return done(new Error("DocInit: Document not found."));
+	                }
+	                console.log("Receive Edits: Loaded doc from docInit.\nFile='" +
+	                  doc + "'");
+	                shadow.doc = doc;
+	                done2(null, shadow);
+	              });
+	            }
+	        ],
+
+	          function(err) {
+	            if (err && err !== "ok") {
+	              console.log("[error] Receive Edits: " + err.message);
+	              return done(err);
+	            }
+
+	            done(null, new ServerShadow(
+	              _.extend(shadow, {
+	                useDeltaPatching: _this.useDeltaPatching
+	              })
+	            ));
+	          }
+
+	        );
 	      });
 	    },
 
@@ -12817,22 +12862,19 @@
 
 	    function(err) {
 	      // TODO: Release db lock
-
-	      if (err) {
-	        return cb(err);
-	      }
-
-	      _this.sendEdits(cb);
+	      cb(err);
 	    }
 
 	  );
 	};
 
 	/**
-	 * Detect changes between the client's shadow and the server text and send
-	 * anything that's missing.
+	 * After edits have been applied from the client, generate a response
+	 * to send back to the client by diffing the updated shadow against
+	 * the master document. This will send any other server updates that
+	 * may have been applied by other clients in the response's edit stack.
 	 */
-	DsEngineServer.prototype.sendEdits = function sendEdits(cb) {
+	DsEngineServer.prototype.generateResponse = function generateResponse(cb) {
 	  var _this = this;
 
 	  async.waterfall([
@@ -13022,11 +13064,11 @@
 
 	ClientShadow.prototype.getDocText = function getDocText() {
 	  return this.doc;
-	}
+	};
 
 	ClientShadow.prototype.setDocText = function getDocText(docText) {
 	  this.doc = docText;
-	}
+	};
 
 	/**
 	 * Apply the supplied editstack as patches on top of the shadow text.
@@ -26798,13 +26840,13 @@
 
 	}());
 
-	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(13), __webpack_require__(15).setImmediate))
+	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(13), __webpack_require__(14).setImmediate))
 
 /***/ },
 /* 12 */
 /***/ function(module, exports, __webpack_require__) {
 
-	module.exports = __webpack_require__(14).diff_match_patch;
+	module.exports = __webpack_require__(15).diff_match_patch;
 
 
 /***/ },
@@ -26905,6 +26947,88 @@
 
 /***/ },
 /* 14 */
+/***/ function(module, exports, __webpack_require__) {
+
+	/* WEBPACK VAR INJECTION */(function(setImmediate, clearImmediate) {var nextTick = __webpack_require__(13).nextTick;
+	var apply = Function.prototype.apply;
+	var slice = Array.prototype.slice;
+	var immediateIds = {};
+	var nextImmediateId = 0;
+
+	// DOM APIs, for completeness
+
+	exports.setTimeout = function() {
+	  return new Timeout(apply.call(setTimeout, window, arguments), clearTimeout);
+	};
+	exports.setInterval = function() {
+	  return new Timeout(apply.call(setInterval, window, arguments), clearInterval);
+	};
+	exports.clearTimeout =
+	exports.clearInterval = function(timeout) { timeout.close(); };
+
+	function Timeout(id, clearFn) {
+	  this._id = id;
+	  this._clearFn = clearFn;
+	}
+	Timeout.prototype.unref = Timeout.prototype.ref = function() {};
+	Timeout.prototype.close = function() {
+	  this._clearFn.call(window, this._id);
+	};
+
+	// Does not start the time, just sets up the members needed.
+	exports.enroll = function(item, msecs) {
+	  clearTimeout(item._idleTimeoutId);
+	  item._idleTimeout = msecs;
+	};
+
+	exports.unenroll = function(item) {
+	  clearTimeout(item._idleTimeoutId);
+	  item._idleTimeout = -1;
+	};
+
+	exports._unrefActive = exports.active = function(item) {
+	  clearTimeout(item._idleTimeoutId);
+
+	  var msecs = item._idleTimeout;
+	  if (msecs >= 0) {
+	    item._idleTimeoutId = setTimeout(function onTimeout() {
+	      if (item._onTimeout)
+	        item._onTimeout();
+	    }, msecs);
+	  }
+	};
+
+	// That's not how node.js implements it but the exposed api is the same.
+	exports.setImmediate = typeof setImmediate === "function" ? setImmediate : function(fn) {
+	  var id = nextImmediateId++;
+	  var args = arguments.length < 2 ? false : slice.call(arguments, 1);
+
+	  immediateIds[id] = true;
+
+	  nextTick(function onNextTick() {
+	    if (immediateIds[id]) {
+	      // fn.call() is faster so we optimize for the common use-case
+	      // @see http://jsperf.com/call-apply-segu
+	      if (args) {
+	        fn.apply(null, args);
+	      } else {
+	        fn.call(null);
+	      }
+	      // Prevent ids from leaking
+	      exports.clearImmediate(id);
+	    }
+	  });
+
+	  return id;
+	};
+
+	exports.clearImmediate = typeof clearImmediate === "function" ? clearImmediate : function(id) {
+	  delete immediateIds[id];
+	};
+	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(14).setImmediate, __webpack_require__(14).clearImmediate))
+
+/***/ },
+/* 15 */
 /***/ function(module, exports, __webpack_require__) {
 
 	/**
@@ -29182,88 +29306,6 @@
 	this['DIFF_INSERT'] = DIFF_INSERT;
 	this['DIFF_EQUAL'] = DIFF_EQUAL;
 
-
-/***/ },
-/* 15 */
-/***/ function(module, exports, __webpack_require__) {
-
-	/* WEBPACK VAR INJECTION */(function(setImmediate, clearImmediate) {var nextTick = __webpack_require__(13).nextTick;
-	var apply = Function.prototype.apply;
-	var slice = Array.prototype.slice;
-	var immediateIds = {};
-	var nextImmediateId = 0;
-
-	// DOM APIs, for completeness
-
-	exports.setTimeout = function() {
-	  return new Timeout(apply.call(setTimeout, window, arguments), clearTimeout);
-	};
-	exports.setInterval = function() {
-	  return new Timeout(apply.call(setInterval, window, arguments), clearInterval);
-	};
-	exports.clearTimeout =
-	exports.clearInterval = function(timeout) { timeout.close(); };
-
-	function Timeout(id, clearFn) {
-	  this._id = id;
-	  this._clearFn = clearFn;
-	}
-	Timeout.prototype.unref = Timeout.prototype.ref = function() {};
-	Timeout.prototype.close = function() {
-	  this._clearFn.call(window, this._id);
-	};
-
-	// Does not start the time, just sets up the members needed.
-	exports.enroll = function(item, msecs) {
-	  clearTimeout(item._idleTimeoutId);
-	  item._idleTimeout = msecs;
-	};
-
-	exports.unenroll = function(item) {
-	  clearTimeout(item._idleTimeoutId);
-	  item._idleTimeout = -1;
-	};
-
-	exports._unrefActive = exports.active = function(item) {
-	  clearTimeout(item._idleTimeoutId);
-
-	  var msecs = item._idleTimeout;
-	  if (msecs >= 0) {
-	    item._idleTimeoutId = setTimeout(function onTimeout() {
-	      if (item._onTimeout)
-	        item._onTimeout();
-	    }, msecs);
-	  }
-	};
-
-	// That's not how node.js implements it but the exposed api is the same.
-	exports.setImmediate = typeof setImmediate === "function" ? setImmediate : function(fn) {
-	  var id = nextImmediateId++;
-	  var args = arguments.length < 2 ? false : slice.call(arguments, 1);
-
-	  immediateIds[id] = true;
-
-	  nextTick(function onNextTick() {
-	    if (immediateIds[id]) {
-	      // fn.call() is faster so we optimize for the common use-case
-	      // @see http://jsperf.com/call-apply-segu
-	      if (args) {
-	        fn.apply(null, args);
-	      } else {
-	        fn.call(null);
-	      }
-	      // Prevent ids from leaking
-	      exports.clearImmediate(id);
-	    }
-	  });
-
-	  return id;
-	};
-
-	exports.clearImmediate = typeof clearImmediate === "function" ? clearImmediate : function(id) {
-	  delete immediateIds[id];
-	};
-	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(15).setImmediate, __webpack_require__(15).clearImmediate))
 
 /***/ }
 /******/ ]);

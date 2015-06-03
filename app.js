@@ -62,17 +62,21 @@ app.post("/sync", function(req, res) {
     return;
   }
 
-  server.receiveEdits(editPacket, function(err, responsePkt) {
+  server.receiveEdits(editPacket, function(err) {
     // Simulate server-to-client packet loss
     if (simulateLostPacket(SIMULATE_SRV_TO_CLIENT_LOSS)) {
       return;
     }
-
     if (err) {
       return res.status(500).send(err);
     }
 
-    res.json(responsePkt);
+    server.generateResponse(function(err, responsePkt) {
+      if (err) {
+        return res.status(500).send(err);
+      }
+      res.json(responsePkt);
+    });
   });
 });
 
