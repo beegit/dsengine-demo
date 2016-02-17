@@ -3,10 +3,23 @@ var DseRedis = require("dsengine-db-redis");
 var express = require("express");
 var bodyParser = require("body-parser");
 var morgan = require("morgan");
+var REDIS_PORT = process.env.REDIS_PORT || 6379;
+var REDIS_HOST = process.env.REDIS_HOST || "localhost";
+var REDIS_PASSWORD = process.env.REDIS_PASSWORD || "";
 var SIMULATE_CLIENT_TO_SRV_LOSS = 0;  // 0 to 100 for pkt loss %
 var SIMULATE_SRV_TO_CLIENT_LOSS = 0;  // 0 to 100 for pkt loss %
 var USE_DELTA_PATCHING = require("./config").USE_DELTA_PATCHING;
 var app = express();
+var redis = require("redis").createClient(REDIS_PORT, REDIS_HOST, {
+  auth_pass: REDIS_PASSWORD,
+  retry_max_delay: 2000
+}).on("connect", function() {
+  console.log("[Redis] Connected to server.");
+}).on("reconnecting", function(retry) {
+  console.log("[Redis] Reconnecting...", retry);
+}).on("error", function() {
+  console.log("[Redis] Error", arguments);
+});
 
 function getRandomIntInclusive(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -53,6 +66,7 @@ app.post("/sync", function(req, res) {
   var server = new DseServer({
     docId: docId,
     clientId: clientId,
+    client: redis,
     db: DseRedis,
     useDeltaPatching: USE_DELTA_PATCHING
   });
